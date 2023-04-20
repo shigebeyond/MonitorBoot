@@ -1,21 +1,17 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
-import os
-import sys
-import fnmatch
 import time
-
 import psutil
-import requests
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from pyutilb.tail import Tail
 from pyutilb.util import *
 from pyutilb.file import *
 from pyutilb.cmd import *
-import curlify
-import threading
-from pyutilb import YamlBoot, BreakException, ocr_youdao, SchedulerThread
+from pyutilb import YamlBoot
 from pyutilb.log import log
 import emailer
+from .gc_log_parser import GcLogParser
 
 # 基于yaml的监控器
 class MonitorBoot(YamlBoot):
@@ -29,42 +25,20 @@ class MonitorBoot(YamlBoot):
         self.add_actions(actions)
 
         self.ip = get_ip() # 当前ip
-        self.scheduler_thread = SchedulerThread() # 定时线程
-        self.jpid = None # java进程id
-        # 上一次gc信息
-        self.last_gc = {
-            'S0C': 0,
-            'S1C': 0,
-            'S0U': 0,
-            'S1U': 0,
-            'EC': 0,
-            'EU': 0,
-            'OC': 0,
-            'OU': 0,
-            'MC': 0,
-            'MU': 0,
-            'CCSC': 0,
-            'CCSU': 0,
-            'YGC':0,
-            'YGCT': 0,
-            'FGC':0,
-            'FGCT': 0,
-            'GCT': 0,
-            'time': None,
-        }
+        # 创建调度器
+        self.scheduler = AsyncIOScheduler()
+        self.scheduler.start()
+        # tail跟踪
+        self.tails = {}
+        # gc日志解析器
+        self.gcparsers = {}
 
     # 执行完的后置处理
     def on_end(self):
-        # 等待定时线程处理完
-        if self.scheduler_thread.thread:
-            self.scheduler_thread.thread.join()
+        # 死循环处理s
+        asyncio.get_event_loop().run_forever()
 
-    # 定时器
-    # :param steps 每次定时要执行的步骤
-    # :param wait_seconds 时间间隔,单位秒
-    def schedule(self, steps, wait_seconds = None):
-        self.scheduler_thread.scheduler.add_job(self.run_steps, 'interval', args=(steps,), seconds=wait_seconds)
-
+    # -------------------------------- 普通动作 -----------------------------------
     # 配置邮件服务器
     def config_email(self, config):
         emailer.config_email(config)
@@ -73,6 +47,44 @@ class MonitorBoot(YamlBoot):
     def send_email(self, params):
         emailer.send_email(params['title'], params['msg'])
 
+    def schedule(self, steps, wait_seconds = None):
+        '''
+        定时器
+        :param steps: 每次定时要执行的步骤
+        :param wait_seconds: 时间间隔,单位秒
+        :return:
+        '''
+        self.scheduler.add_job(self.run_steps, 'interval', args=(steps,), seconds=wait_seconds)
+
+    def tail(self, steps, file):
+        '''
+        监控文件内容追加，常用于订阅日志变更
+           变量 tail_line 记录读到的行
+        :param steps: 每次定时要执行的步骤
+        :param file: 文件路径
+        :return:
+        '''
+        def read_line(line):
+            # 将行塞到变量中，以便子步骤能读取
+            set_var('tail_line', line)
+            # 执行子步骤
+            self.run_steps(steps)
+            # 清理变量
+            set_var('tail_line', None)
+        self.do_tail(file, read_line)
+
+    def do_tail(self, file, callback):
+        '''
+        监控文件内容追加，常用于订阅日志变更
+        :param file: 文件路径
+        :param callback: 回调
+        :return:
+        '''
+        t = Tail(file, self.scheduler)
+        self.tails[file] = t
+        t.follow(callback)
+
+    # -------------------------------- 系统告警的动作 -----------------------------------
     # 告警
     def alert(self, msg):
         # todo: 发邮件
@@ -101,12 +113,57 @@ class MonitorBoot(YamlBoot):
         if pdisk > max_pdisk:
             self.alert(f"主机[{self.ip}]的磁盘根目录使用率过高为{pdisk:.2f}%, 大于告警的最大使用率{max_pdisk}")
 
-    # 监控java进程
-    def watch_java_pid(self, grep):
+    # -------------------------------- 监控java进程 -----------------------------------
+    def jps_grep(self, grep):
+        '''
+        监控java进程
+        :param grep: 用ps aux搜索进程时要搜索的关键字
+        :return:
+        '''
         pid = get_pid_by_grep('java', grep)
         if pid is None:
             raise Exception(f"不存在匹配的java进程: {grep}")
-        self.jpid = pid
+        set_var('jpid', pid)
+
+    # 获得当前java进程id
+    def jpid(self):
+        return get_var('jpid')
+
+    def jmap(self):
+        cmd = 'jmap -dump:live,format=b,file=headInfo.hprof 进程id'
+        run_command()
+
+    # -------------------------------- jvm(进程+gc日志+线程日志)告警的动作 -----------------------------------
+    def monitor_gc_log(self, steps, file):
+        '''
+        监控gc日志文件内容追加，要解析gc日志
+          变量 gc 记录当前行解析出来的gc信息
+          变量 gc_log 记录gc日志文件
+        :param steps: 每次定时要执行的步骤
+        :param file: gc日志文件路径
+        :return:
+        '''
+        self.gcparsers[file] = GcLogParser()
+        def read_line(line):
+            # 解析gc信息
+            gc = self.gcparsers[file].parse_gc_line(line)
+            if gc != None:
+                # 将gc信息塞到变量中，以便子步骤能读取
+                set_var('gc', gc)
+                set_var('gc_log', file)
+                # 执行子步骤
+                self.run_steps(steps)
+                # 清理变量
+                set_var('gc', None)
+                set_var('gc_log', None)
+        self.do_tail(file, read_line)
+
+    # 执行子动作时获得当前的gc日志解析器
+    def current_gcparser(self):
+        file = get_var('gc_log')
+        if file is None or file not in self.gcparsers:
+            raise Exception(f'无监控gc日志: {file}')
+        return self.gcparsers[file]
 
     # 告警yound gc单次耗时
     def alert_youndgc_time(self, max_gc_costtime):
@@ -116,23 +173,10 @@ class MonitorBoot(YamlBoot):
     def alert_fullgc_time(self, max_gc_costtime):
         self.alert_gc_costtime(max_gc_costtime, 'FGC')
 
+
     # 告警full gc间隔
-    def alert_fullgc_time(self, max_gc_costtime):
-        self.alert_gc_costtime(max_gc_costtime, 'FGC')
-
-        fgc = int(res[14])
-        if self.FGC[str(port)] < fgc:  # If the times of FGC increases
-            self.FGC[str(port)] = fgc
-
-            if len(self.FGC_time[str(port)]) > 2:   # Calculate FGC frequency
-                frequency = self.FGC_time[str(port)][-1] - self.FGC_time[str(port)][-2]
-                if frequency < self.frequencyFGC:    # If FGC frequency is too high, send email.
-                    msg = f'The Full GC frequency of port {port} is {frequency}, it is too high. Server IP: {self.IP}'
-                    logger.warning(msg)
-                    if self.isJvmAlert:
-                        thread = threading.Thread(target=notification, args=(msg, ))
-                        thread.start()
-
+    def alert_fullgc_interval(self, max_gc_interval):
+        self.alert_gc_interval(max_gc_interval, 'FGC')
 
     def alert_gc_costtime(self, max_gc_costtime, type):
         '''
@@ -184,11 +228,6 @@ class MonitorBoot(YamlBoot):
 
 # cli入口
 def main():
-    output = os.popen(f'jstat -gc 7061').read()
-    df = cmd_output2data_frame(output)
-    print(df)
-    exit()
-
     # 基于yaml的执行器
     boot = MonitorBoot()
     # 读元数据：author/version/description

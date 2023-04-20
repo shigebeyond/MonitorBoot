@@ -1,4 +1,3 @@
-# gc日志解析
 import re
 
 from pyutilb.file import read_file
@@ -14,8 +13,6 @@ gc日志解析，主要用于识别频繁gc 或 gc效率不高
 class GcLogParser(object):
 
     def __init__(self):
-        # 日志文件
-        self.log_file = None
         # 收集日志信息
         self.gcs = []
 

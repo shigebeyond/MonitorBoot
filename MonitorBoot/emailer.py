@@ -36,14 +36,22 @@ def send_email(title, msg, to_email = None, to_name = None):
 
 # 真正的发邮件
 def do_send_email(message, to_email):
-    try:
-        smtp = smtplib.SMTP_SSL(config['host'], 465)  # qq邮箱
-    except socket.error:
-        smtp = smtplib.SMTP(config['host'], 25)  # 163邮箱
-    smtp.login(config['from_email'], config['password'])
+    smtp = login()
     smtp.sendmail(config['from_email'], to_email, message.as_string())
     smtp.quit()
 
+# 登录邮件server
+_smtp = None
+def login():
+    global _smtp
+    if _smtp is None:
+        try:
+            _smtp = smtplib.SMTP_SSL(config['host'], 465)  # qq邮箱
+        except socket.error:
+            _smtp = smtplib.SMTP(config['host'], 25)  # 163邮箱
+        _smtp.login(config['from_email'], config['password'])
+    return _smtp
+
 
 if __name__ == '__main__':
-    sendEmail(1)
+    send_email(1)
