@@ -1,3 +1,4 @@
+import os
 import re
 
 from pyutilb.file import read_file
@@ -12,9 +13,10 @@ gc日志解析，主要用于识别频繁gc 或 gc效率不高
 '''
 class GcLogParser(object):
 
-    def __init__(self):
-        # 收集日志信息
-        self.gcs = []
+    def __init__(self, log_file):
+        self.log_file = os.path.abspath(log_file)
+        self.start_time = os.path.getctime(self.log_file)
+        self.gcs = [] # 收集日志信息
 
     # 获得上一条年轻代或老年代的gc信息
     def last_gc(self, is_full):
@@ -27,8 +29,8 @@ class GcLogParser(object):
 
     # 解析gc日志
     # :param log_file 日志文件路径
-    def parse_gc_log(self, log_file):
-        txt = read_file(log_file)
+    def parse(self):
+        txt = read_file(self.log_file)
         for line in txt.splitlines():
             # 解析单行
             gc = self.parse_gc_line(line)
@@ -68,9 +70,18 @@ class GcLogParser(object):
         line = line.replace(', ,', ',').replace(') ', '):')
         data = self.parse_gen(line)
         data['jvm_time'] = substr_before(line, ': [') # gc发生时vm运行了多少秒
-        data['is_full'] = 'Full GC' in line
+        is_full = 'Full GC' in line
+        data['is_full'] = is_full
+        # 计算两次gc之间的时间间隔
+        lastgc = self.last_gc(is_full)
+        if lastgc is None:
+            # data['interval'] = data['jvm_time'] # 你不知道他是从啥时开始监控日志的，也不知道监控之前有没有gc过
+            data['interval'] = 0
+        else:
+            data['interval'] = float(data['jvm_time']) - float(lastgc['jvm_time'])
         # print("解析总年代: " + line + ", 结果为: " + str(data))
         gc['Sum'] = data  # 记录解析结果
+
         # print(gc)
         if gc is not None:
             self.gcs.append(gc)
@@ -96,8 +107,8 @@ class GcLogParser(object):
 if __name__ == '__main__':
     line = '0.084: [GC (Allocation Failure) [PSYoungGen: 1525K->512K(1536K)] 3556K->2886K(5632K), 0.0039928 secs] [Times: user=0.01 sys=0.00, real=0.00 secs]'
     # line = '0.089: [Full GC (Ergonomics) [PSYoungGen: 1536K->0K(1536K)] [ParOldGen: 3312K->4088K(4096K)] 4848K->4088K(5632K), [Metaspace: 3313K->3313K(1056768K)], 0.0416957 secs] [Times: user=0.13 sys=0.00, real=0.04 secs]'
-    parser = GcLogParser()
+    parser = GcLogParser('logs/gc2.log')
     # parser.parse_gc_line(line)
-    parser.parse_gc_log('logs/gc2.log')
+    parser.parse()
     for gc in parser.gcs:
         print(gc)

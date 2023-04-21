@@ -1,0 +1,20 @@
+# 监控java进程的pid
+- monitor_jpid:
+    grep: xxx
+    when_no_run: # 没运行时执行以下步骤
+      - xxx
+
+# 定时做系统告警
+- schedule(10):
+    - alert: # 告警
+        mem_free: 1024M # 剩余内存 >= 1024M
+        cpu_percent: 90 # cpu使用率 >= 90%
+        disk_percent: 90 # 磁盘使用率 >= 90%
+
+#
+- monitor_gc_log(../logs/gc2.log):
+    - alert: # 告警
+          younggc_costtime: 10 # gc耗时 > 10s
+          fullgc_costtime: 10
+          fullgc_interval: 1 # gc间隔时间 < 1s
+
