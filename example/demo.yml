@@ -6,12 +6,15 @@
 
 # 定时做系统告警
 - schedule(10):
+    - when_alert:
+        - dump_heap:
+        - dump_thread:
     - alert: # 告警
         mem_free: 1024M # 剩余内存 >= 1024M
         cpu_percent: 90 # cpu使用率 >= 90%
         disk_percent: 90 # 磁盘使用率 >= 90%
 
-#
+# 监控gc日志
 - monitor_gc_log(../logs/gc2.log):
     - alert: # 告警
           younggc_costtime: 10 # gc耗时 > 10s

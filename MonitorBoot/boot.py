@@ -8,10 +8,13 @@ from pyutilb.tail import Tail
 from pyutilb.util import *
 from pyutilb.file import *
 from pyutilb.cmd import *
-from pyutilb import YamlBoot
+from pyutilb import YamlBoot, EventLoopThreadPool
 from pyutilb.log import log
-import emailer
+from MonitorBoot import emailer
 from MonitorBoot.gc_log_parser import GcLogParser
+
+# 协程线程池
+pool = EventLoopThreadPool(1)
 
 # 基于yaml的监控器
 class MonitorBoot(YamlBoot):
@@ -180,9 +183,32 @@ class MonitorBoot(YamlBoot):
             raise Exception(f"不存在匹配的java进程: {grep}")
         self.jpid = pid
 
-    def jmap(self):
-        cmd = 'jmap -dump:live,format=b,file=headInfo.hprof 进程id'
-        run_command()
+    # 挑出繁忙的线程
+    def pick_busy_thread(self):
+        # top -Hp pid
+        # pidstat -t -p pid
+        pass
+
+    # 挑出等待很久的线程
+    def pick_wait_thread(self):
+        pass
+
+
+    # 生成堆快照
+    @pool.run_in_pool
+    async def dump_heap(self, msg):
+        file = 'xxx.hprof'
+        cmd = f'jmap -dump:live,format=b,file={file} {self.jpid}'
+        await run_command_async(cmd)
+        log.info(f"由[{msg}]而生成堆快照文件: {file}")
+
+    # 生成线程栈
+    @pool.run_in_pool
+    async def dump_thread(self, msg):
+        file = 'xxx.stack'
+        cmd = f'jstack -l {self.jpid} > {file}'
+        await run_command_async(cmd)
+        log.info(f"由[{msg}]而生成线程栈文件: {file}")
 
     # -------------------------------- jvm(进程+gc日志+线程日志)告警的动作 -----------------------------------
     def monitor_gc_log(self, steps, file):
@@ -311,3 +337,5 @@ if __name__ == '__main__':
     print("p.open_files(): " + str(p.open_files()))
     print("p.connections(): " + str(p.connections()))
     print("p.is_running(): " + str(p.is_running()))
+
+    run_command(f'top -Hp ')
