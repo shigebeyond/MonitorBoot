@@ -37,7 +37,7 @@ class MonitorBoot(YamlBoot):
             'dump_heap': self.dump_heap,
             'dump_thread': self.dump_thread,
             'monitor_gc_log': self.monitor_gc_log,
-
+            'sys2csv': self.sys2csv,
         }
         self.add_actions(actions)
 
@@ -90,7 +90,7 @@ class MonitorBoot(YamlBoot):
     # 异步执行步骤：主要是优化 psutil.cpu_percent(1) 的阻塞带来的性能问题，要扔到eventloop所在的线程中运行
     async def run_steps_async(self, steps):
         # 提前准备好SysInfo
-        sys = SysInfo.prepare_fields_in_steps(steps)
+        sys = await SysInfo.prepare_fields_in_steps(steps)
         set_var('sys', sys)
 
         # 真正执行步骤
@@ -98,14 +98,14 @@ class MonitorBoot(YamlBoot):
         print(f"thread[{name}]执行步骤")
         self.run_steps(steps)
 
-    def schedule(self, steps, wait_seconds = None):
+    def schedule(self, steps, wait_seconds):
         '''
         定时器
         :param steps: 每次定时要执行的步骤
         :param wait_seconds: 时间间隔,单位秒
         :return:
         '''
-        self.scheduler.add_job(self.run_steps_async, 'interval', args=(steps,), seconds=wait_seconds)
+        self.scheduler.add_job(self.run_steps_async, 'interval', args=(steps,), seconds=int(wait_seconds))
 
     def tail(self, steps, file):
         '''
@@ -247,10 +247,14 @@ class MonitorBoot(YamlBoot):
                 self.run_steps(options['when_no_run'])
 
         # 3 使用递归+延迟来实现定时检查
-        interval = 10
-        if 'interval' in options and options['interval'] is not None:
-            interval = int(options['interval'])
+        interval = self.get_interval(options)
         self.loop.call_later(interval, self.monitor_jpid, options)
+
+    # 从选项中获得时间间隔
+    def get_interval(self, options):
+        if 'interval' in options and options['interval'] is not None:
+            return int(options['interval'])
+        return 10
 
     def grep_jpid(self, grep):
         '''
@@ -389,17 +393,23 @@ class MonitorBoot(YamlBoot):
         return gc
 
     # -------------------------------- 输出到csv -----------------------------------
-    def sys2csv(self, interval):
-        while True:
-            rows = []
-            sys = SysInfo.prepare_all_fields()
-            sys = SysInfo()
-            cols =  ['日期', '时间', 'cpu百分比/s', '已用内存/MB', '磁盘读取MB/s', '磁盘写入MB/s', '网络上传MB/s', '网络下载MB/s']
-            row = [ts.today(), ts.now(), sys.cpu_percent, sys.mem_used, sys.]
-            df = pd.DataFrame(rows, columns=cols)
-            file = f'MointorBoot{ts.today()}.hprof'
-            df.to_csv(file)
-            time.sleep(interval)
+    # 将系统信息存到csv中
+    @pool.run_in_pool
+    async def sys2csv(self, _):
+        today = ts.today()
+        file = f'MointorBoot{today}.csv'
+        if not os.path.exists(file):
+            cols = ['date', 'time', 'cpu%/s', 'mem_used(MB)', 'disk_read(MB/s)', 'disk_write(MB/s)', 'net_sent(MB/s)', 'net_recv(MB/s)']
+            self.append_csv_row(file, cols)
+
+        sys = await SysInfo.prepare_all_fields()
+        row = [today, ts.now(), sys.cpu_percent, sys.mem_used, sys.disk_read, sys.disk_write, sys.net_sent, sys.net_recv]
+        self.append_csv_row(file, row)
+
+    def append_csv_row(self, file, line):
+        with open(file, 'a+', encoding='utf-8', newline='') as file_obj:
+            writer = csv.writer(file_obj)
+            writer.writerow(line)
 
 # cli入口
 def main():
@@ -416,12 +426,12 @@ def main():
         # 执行yaml配置的步骤
         boot.run(step_files)
     except Exception as ex:
-        log.error(f"Exception occurs: current step file is {boot.step_file}, current url is {boot.curr_url}", exc_info = ex)
+        log.error(f"Exception occurs: current step file is {boot.step_file}", exc_info = ex)
         raise ex
 
 if __name__ == '__main__':
-    # main()
-    output = run_command(f'pidstat -t -p 9702')
+    main()
+    # output = run_command(f'pidstat -t -p 9702')
     '''
     输出如下，要干掉前两行
     Linux 5.10.60-amd64-desktop (shi-PC) 	2023年04月23日 	_x86_64_	(6 CPU)
@@ -429,6 +439,7 @@ if __name__ == '__main__':
     11时28分27秒   UID      TGID       TID    %usr %system  %guest   %wait    %CPU   CPU  Command
     11时28分27秒  1000      9702         -   19.37    0.50    0.00    0.00   19.87     0  java
     11时28分27秒  1000         -      9702    0.00    0.00    0.00    0.00    0.00     0  |__java
+    '''
     '''
     # re.search(r"^[\n]+\n\n", output)
     output = re.sub(r"^.+\n\n", '', output)
@@ -451,4 +462,4 @@ if __name__ == '__main__':
     print(df3)
     print(df3.head(2))
     print(df3.iloc[0])
-
+    '''

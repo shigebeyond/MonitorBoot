@@ -1,3 +1,5 @@
+- schedule(10):
+    - sys2csv:
 # 监控java进程的pid
 - monitor_jpid:
     grep: java | jvisualvm
