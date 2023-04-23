@@ -4,14 +4,16 @@ import os
 import time
 import psutil
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from pyutilb.strs import substr_after, substr_before
 from pyutilb.tail import Tail
 from pyutilb.util import *
 from pyutilb.file import *
 from pyutilb.cmd import *
-from pyutilb import YamlBoot, EventLoopThreadPool
+from pyutilb import YamlBoot, EventLoopThreadPool, ts
 from pyutilb.log import log
 from MonitorBoot import emailer
 from MonitorBoot.gc_log_parser import GcLogParser
+from MonitorBoot.sysinfo import SysInfo
 
 # 协程线程池
 pool = EventLoopThreadPool(1)
@@ -24,31 +26,20 @@ class MonitorBoot(YamlBoot):
         # 动作映射函数
         actions = {
             'config_email': self.config_email,
+            'send_email': self.send_email,
             'schedule': self.schedule,
             'tail': self.tail,
+            'when_alert': self.when_alert,
             'alert': self.alert,
-            'alert_mem_free': self.alert_mem_free,
-            'alert_cpu_percent': self.alert_cpu_percent,
-            'alert_disk_percent': self.alert_disk_percent,
+            'send_alert_email': self.send_alert_email,
+            'monitor_jpid': self.monitor_jpid,
             'grep_jpid': self.grep_jpid,
+            'dump_heap': self.dump_heap,
+            'dump_thread': self.dump_thread,
             'monitor_gc_log': self.monitor_gc_log,
-            'alert_younggc_costtime': self.alert_younggc_costtime,
-            'alert_younggc_interval': self.alert_younggc_interval,
-            'alert_fullgc_costtime': self.alert_fullgc_costtime,
-            'alert_fullgc_interval': self.alert_fullgc_interval,
+
         }
         self.add_actions(actions)
-
-        # 告警类型映射处理方法
-        self.alert_type_mapping = {
-            'mem_free': self.alert_mem_free,
-            'cpu_percent': self.alert_cpu_percent,
-            'disk_percent': self.alert_disk_percent,
-            'younggc_costtime': self.alert_younggc_costtime,
-            'younggc_interval': self.alert_younggc_interval,
-            'fullgc_costtime': self.alert_fullgc_costtime,
-            'fullgc_interval': self.alert_fullgc_interval,
-        }
 
         # 当前ip
         self.ip = get_ip()
@@ -61,8 +52,26 @@ class MonitorBoot(YamlBoot):
         self.tails = {}
         # gc日志解析器，只支持解析单个日志，没必要支持解析多个日志
         self.gc_parser = None
-        # 监控的java进程id
-        self.jpid = None
+
+        # ----- 告警处理 -----
+        # 告警字段
+        self.alert_cols = [
+            'mem_free',
+            'cpu_percent',
+            'disk_percent',
+            'ygc.costtime',
+            'ygc.interval',
+            'fgc.costtime',
+            'fgc.interval',
+        ]
+        # 操作符函数映射
+        self.ops = {
+            '=': lambda val, param: float(val) == float(param),
+            '>': lambda val, param: float(val) > float(param),
+            '<': lambda val, param: float(val) < float(param),
+            '>=': lambda val, param: float(val) >= float(param),
+            '<=': lambda val, param: float(val) <= float(param),
+        }
 
     # 执行完的后置处理
     def on_end(self):
@@ -78,26 +87,16 @@ class MonitorBoot(YamlBoot):
     def send_email(self, params):
         emailer.send_email(params['title'], params['msg'])
 
-    # 异步执行步骤
-    # 主要是优化 psutil.cpu_percent(1) 的阻塞带来的性能问题
+    # 异步执行步骤：主要是优化 psutil.cpu_percent(1) 的阻塞带来的性能问题，要扔到eventloop所在的线程中运行
     async def run_steps_async(self, steps):
-        if self.has_cpu_percent_step(steps):
-            # 1 对 psutil.cpu_percent(interval)，当interval不为空，则阻塞
-            #psutil.cpu_percent(1) # 会阻塞1s
-
-            # 2 当interval为空时，计算的cpu时间是相对上一次调用的，第1次计算直接返回0，因此主动调用一下，让后续动作的调用有结果
-            psutil.cpu_percent() # 对 psutil.cpu_percent(1) 的异步实现
-            await asyncio.sleep(1)
+        # 提前准备好SysInfo
+        sys = SysInfo.prepare_fields_in_steps(steps)
+        set_var('sys', sys)
 
         # 真正执行步骤
         name = threading.current_thread()  # MainThread
         print(f"thread[{name}]执行步骤")
         self.run_steps(steps)
-
-    # 是否有获得cpu使用率的步骤
-    def has_cpu_percent_step(self, steps):
-        return 'alert_cpu_percent' in steps \
-            or ('alert' in steps and 'cpu_percent' in steps['alert'])
 
     def schedule(self, steps, wait_seconds = None):
         '''
@@ -136,42 +135,123 @@ class MonitorBoot(YamlBoot):
         self.tails[file] = t
         t.follow(callback)
 
-    # -------------------------------- 系统告警的动作 -----------------------------------
-    # 多类型的告警统一调用
-    def alert(self, config):
-        for type, params in config:
-            func = self.alert_type_mapping[type]
-            func(params)
+    # -------------------------------- 告警的动作 -----------------------------------
+    # ThreadLocal记录当发生告警要调用的动作
+    # 必须在 alert() 动作前调用
+    def when_alert(self, steps):
+        set_var('when_alert', steps)
 
-    # 处理告警
-    def do_alert(self, msg):
-        # todo: 发邮件
-        print_exception(msg)
+    # 告警处理
+    def alert(self, exprs):
+        if not isinstance(exprs, (str, list)):
+            raise Exception("告警参数必须str或list类型")
+        if isinstance(exprs, str):
+            exprs = [exprs]
 
-    # 告警可用内存
-    def alert_mem_free(self, min_mem):
-        # free 是真正尚未被使用的物理内存数量。
-        # available 是应用程序认为可用内存数量，available = free + buffer + cache
-        memory_info = psutil.virtual_memory()
-        if memory_info.free < file_size2bytes(min_mem):
-            unit = min_mem[-1]
-            free_size = bytes2file_size(memory_info.free, unit)
-            self.do_alert(f"主机[{self.ip}]的空闲内存不足为{free_size}, 小于告警的最小内存{min_mem}")
+        try:
+            # 1 逐个表达式来执行告警
+            for expr in exprs:
+                self.do_alert(expr)
+        except Exception as ex:
+            log.error(ex.msg, exc_info = ex)
+            set_var('alert_msg', ex.msg)
+            # 2 当发生告警异常要调用when_alert注册的动作
+            steps = get_var('when_alert')
+            if steps:
+                log.info("告警发生, 触发when_alert注册的动作")
+                self.run_steps(steps)
+            # 清空alert相关变量
+            set_var('when_alert', None)
+            set_var('alert_msg', None)
 
-    # 告警cpu使用率
-    def alert_cpu_percent(self, max_pcpu):
-        pcpu = psutil.cpu_percent()
-        if pcpu > self.max_cpu:
-            self.do_alert(f"主机[{self.ip}]的cpu使用率过高为{pcpu:.2f}%, 大于告警的最大使用率{max_pcpu}")
+    def do_alert(self, expr):
+        '''
+        处理单个字段的告警，如果符合条件，则抛出报警异常
+        :param expr: 告警的条件表达式，只支持简单的三元表达式，操作符只支持 =, <, >, <=, >=
+               如 mem_free <= 1024M
+        '''
+        # 分割字段+操作符+值
+        col, op, param = re.split(r'\s+', expr.strip(), 3)
+        # 获得col所在的对象
+        if '.' not in col:
+            col = 'sys.' + col
+        obj_name, col2 = col.split('.')
+        obj = self.get_op_object(obj_name)
+        # 读col值
+        val = getattr(obj, col2)
+        # 执行操作符函数
+        ret = bool(self.run_op(op, val, param))
+        if ret:
+            msg = f"主机[{self.ip}]在{ts.now2str()}时发生告警: {col}({val}) {op} {param}"
+            raise Exception(msg)
 
-    # 告警磁盘使用率
-    def alert_disk_percent(self, max_pdisk):
-        disk_info = psutil.disk_usage("/") # 根目录磁盘信息
-        pdisk = float(disk_info.used / disk_info.total * 100) # 根目录使用情况
-        if pdisk > max_pdisk:
-            self.do_alert(f"主机[{self.ip}]的磁盘根目录使用率过高为{pdisk:.2f}%, 大于告警的最大使用率{max_pdisk}")
+    def get_op_object(self, obj_name):
+        if 'ygc' == obj_name:
+            return self.check_current_gc(False)
+        if 'fgc'  == obj_name:
+            return self.check_current_gc(True)
+        return get_var('sys')
+
+    def run_op(self, op, val, param):
+        '''
+        执行操作符：就是调用函数
+        :param op: 操作符
+        :param val: 校验的值
+        :param param: 参数
+        :return:
+        '''
+        if op not in self.ops:
+            raise Exception(f'Invalid validate operator: {op}')
+        # 调用校验函数
+        log.debug(f"Call validate operator: {op}={param}")
+        op = self.ops[op]
+        return op(val, param)
+
+    # 发送告警邮件
+    def send_alert_email(self):
+        msg = get_var('alert_msg')
+        if ':' in msg:
+            title = substr_before(msg, ':')
+        else:
+            title = msg
+        self.send_email({
+            'title': title,
+            'msg': msg,
+        })
 
     # -------------------------------- 监控java进程 -----------------------------------
+    # 监控的java进程id
+    @property
+    def jpid(self):
+        pid = get_var('jpid')
+        if pid is None:
+            raise Exception("无jpid")
+        return pid
+
+    def monitor_jpid(self, options):
+        '''
+        监控java进程，如果进程不存在，则抛异常
+        :param options 选项，包含
+                    grep: 用ps aux搜索进程时要搜索的关键字
+                    interval: 定时检查的时间间隔，用于定时检查进程是否还存在，为null则不检查
+                    when_no_run: 当进程没运行时执行的步骤
+        :return:
+        '''
+        # 1 使用 ps aux | grep 来获得pid
+        try:
+            self.grep_jpid(options['grep'])
+        except Exception as ex:
+            # 2 当进程没运行时执行的步骤
+            if 'when_no_run' in options and options['when_no_run'] is not None:
+                log.info(f"进程[{options['grep']}]没运行, 触发when_no_run注册的动作")
+                self.run_steps(options['when_no_run'])
+
+        # 3 使用递归+延迟来实现定时检查
+        interval = 10
+        if 'interval' in options and options['interval'] is not None:
+            interval = int(options['interval'])
+        self.loop.call_later(interval, self.monitor_jpid, options)
+
     def grep_jpid(self, grep):
         '''
         监控java进程，如果进程不存在，则抛异常
@@ -181,36 +261,92 @@ class MonitorBoot(YamlBoot):
         pid = get_pid_by_grep(grep)
         if pid is None:
             raise Exception(f"不存在匹配的java进程: {grep}")
-        self.jpid = pid
+        set_var('jpid', pid)
 
-    # 挑出繁忙的线程
+    @pool.run_in_pool
+    async def dump_heap(self, filename_pref):
+        '''
+        生成堆快照
+        :param filename_pref: 文件名前缀
+        :return:
+        '''
+        now = ts.now2str().replace(' ', '_')
+        file = f'{filename_pref}-{now}.hprof'
+        cmd = f'jmap -dump:live,format=b,file={file} {self.jpid}'
+        await run_command_async(cmd)
+        log.info(f"生成堆快照文件: {file}")
+
+    @pool.run_in_pool
+    async def dump_thread(self, filename_pref):
+        '''
+        生成线程栈
+        :param filename_pref: 文件名前缀
+        :return:
+        '''
+        now = ts.now2str().replace(' ', '-')
+        file = f'{filename_pref}-{now}.stack'
+        cmd = f'jstack -l {self.jpid} > {file}'
+        await run_command_async(cmd)
+        log.info(f"生成线程栈文件: {file}")
+
+    # -------------------------------- 线程处理 -----------------------------------
+    # 挑出繁忙的线程： 用 pidstat -t -p pid
     def pick_busy_thread(self):
-        # top -Hp pid
-        # pidstat -t -p pid
-        pass
+        # 1 获得线程
+        df = self.get_threads_df()
+        # 2 按cpu降序
+        df = df.sort_values(by='%CPU', ascending=False)
+        # 3 选择第一个
+        # 取前2个: print(df.head(2))
+        # 取第1个: df.iloc[0]
+        row = df.iloc[0]
+        log.info(f"进程[{self.jpid}]中最繁忙的线程为: {row}")
 
     # 挑出等待很久的线程
     def pick_wait_thread(self):
         pass
 
+    # 通过 pidstat -t -p pid 来获得线程
+    def get_threads_df(self):
+        # 1 执行命令
+        output = run_command_async(f'pidstat -t -p {self.jpid}')
+        '''
+            输出如下，要干掉前两行
+            Linux 5.10.60-amd64-desktop (shi-PC) 	2023年04月23日 	_x86_64_	(6 CPU)
+    
+            11时28分27秒   UID      TGID       TID    %usr %system  %guest   %wait    %CPU   CPU  Command
+            11时28分27秒  1000      9702         -   19.37    0.50    0.00    0.00   19.87     0  java
+            11时28分27秒  1000         -      9702    0.00    0.00    0.00    0.00    0.00     0  |__java
+            '''
+        output = re.sub(r"^.+\n\n", '', output)
+        # 2 将命令结果转为df
+        df = cmd_output2dataframe(output)
+        # 3 过滤业务线程: 通过构建 VM_THREAD 列来过滤
+        df['VM_THREAD'] = self.build_vm_thread_col(df)
+        df2 = df.loc[lambda x: x['VM_THREAD'] == False]
+        del df2['VM_THREAD']
+        return df2
 
-    # 生成堆快照
-    @pool.run_in_pool
-    async def dump_heap(self, msg):
-        file = 'xxx.hprof'
-        cmd = f'jmap -dump:live,format=b,file={file} {self.jpid}'
-        await run_command_async(cmd)
-        log.info(f"由[{msg}]而生成堆快照文件: {file}")
+    # 构建是否vm线程，非业务线程
+    def build_vm_thread_col(self, df):
+        ret = []
+        for i, row in df.iterrows():
+            # 第一条是进程而不是线程，如java且tid为-，不要
+            # 其他: vm线程不要
+            val = row['TID'] == '-' \
+                  or self.is_vm_thread(row['Command'])
+            ret.append(val)
+        return ret
 
-    # 生成线程栈
-    @pool.run_in_pool
-    async def dump_thread(self, msg):
-        file = 'xxx.stack'
-        cmd = f'jstack -l {self.jpid} > {file}'
-        await run_command_async(cmd)
-        log.info(f"由[{msg}]而生成线程栈文件: {file}")
+    # 是否vm线程，非业务线程
+    features = 'GC Thread#,G1 Main Marker,G1 Conc#,G1 Refine#,G1 Young RemSet,VM Thread,Reference Handl,Finalizer,Signal Dispatch,Service Thread,C2 CompilerThre,C1 CompilerThre,Sweeper thread,VM Periodic Tas,Common-Cleaner,process reaper,GC Thread#,GC Thread#,GC Thread#,GC Thread#,GC Thread#,G1 Refine#,G1 Conc#,G1 Refine#,G1 Refine#'.split(',')
+    def is_vm_thread(self, thread_name):
+        for f in self.features:
+            if f in thread_name:
+                return True
+        return False
 
-    # -------------------------------- jvm(进程+gc日志+线程日志)告警的动作 -----------------------------------
+    # -------------------------------- 监控jvm(进程+gc日志+线程日志)的动作 -----------------------------------
     def monitor_gc_log(self, steps, file):
         '''
         监控gc日志文件内容追加，要解析gc日志
@@ -252,53 +388,18 @@ class MonitorBoot(YamlBoot):
 
         return gc
 
-    # 告警young gc单次耗时
-    def alert_younggc_costtime(self, max_gc_costtime):
-        self.do_alert_gc_costtime(max_gc_costtime, False)
-
-    # 告警young gc间隔时间
-    def alert_younggc_interval(self, min_gc_interval):
-        self.do_alert_gc_interval(min_gc_interval, False)
-
-    # 告警full gc单次耗时
-    def alert_fullgc_costtime(self, max_gc_costtime):
-        self.do_alert_gc_costtime(max_gc_costtime, True)
-
-    # 告警full gc间隔时间
-    def alert_fullgc_interval(self, min_gc_interval):
-        self.do_alert_gc_interval(min_gc_interval, True)
-
-    def do_alert_gc_costtime(self, max_gc_costtime, is_full):
-        '''
-        告警gc单次耗时
-        :param max_gc_costtime:
-        :param is_full: 是否full gc
-        :return:
-        '''
-        gc = self.check_current_gc(is_full)
-        if gc is None:
-            return
-
-        # 比较gc耗时
-        costtime = float(gc['Sum']['cost_time'])
-        if costtime > max_gc_costtime:
-            self.do_alert(f"主机[{self.ip}]进程[{self.jpid}]gc耗时为{costtime:.2f}s, 大于告警的最大耗时{max_gc_costtime}")
-
-    def do_alert_gc_interval(self, min_gc_interval, is_full):
-        '''
-        告警gc单次耗时
-        :param min_gc_interval: 最小间隔时间
-        :param is_full: 是否full gc
-        :return:
-        '''
-        gc = self.check_current_gc(is_full)
-        if gc is None:
-            return
-
-        interval = float(gc['Sum']['interval'])
-        if interval < min_gc_interval:
-            self.do_alert(f"主机[{self.ip}]进程[{self.jpid}]gc间隔为{interval:.2f}s, 小于告警的最小间隔{min_gc_interval}")
-
+    # -------------------------------- 输出到csv -----------------------------------
+    def sys2csv(self, interval):
+        while True:
+            rows = []
+            sys = SysInfo.prepare_all_fields()
+            sys = SysInfo()
+            cols =  ['日期', '时间', 'cpu百分比/s', '已用内存/MB', '磁盘读取MB/s', '磁盘写入MB/s', '网络上传MB/s', '网络下载MB/s']
+            row = [ts.today(), ts.now(), sys.cpu_percent, sys.mem_used, sys.]
+            df = pd.DataFrame(rows, columns=cols)
+            file = f'MointorBoot{ts.today()}.hprof'
+            df.to_csv(file)
+            time.sleep(interval)
 
 # cli入口
 def main():
@@ -320,22 +421,34 @@ def main():
 
 if __name__ == '__main__':
     # main()
+    output = run_command(f'pidstat -t -p 9702')
+    '''
+    输出如下，要干掉前两行
+    Linux 5.10.60-amd64-desktop (shi-PC) 	2023年04月23日 	_x86_64_	(6 CPU)
 
-    print("psutil.cpu_percent(): " + str(psutil.cpu_percent(None, percpu=True)))
-    print("psutil.disk_io_counters(): " + str(psutil.disk_io_counters(perdisk=True)))
+    11时28分27秒   UID      TGID       TID    %usr %system  %guest   %wait    %CPU   CPU  Command
+    11时28分27秒  1000      9702         -   19.37    0.50    0.00    0.00   19.87     0  java
+    11时28分27秒  1000         -      9702    0.00    0.00    0.00    0.00    0.00     0  |__java
+    '''
+    # re.search(r"^[\n]+\n\n", output)
+    output = re.sub(r"^.+\n\n", '', output)
+    print(output)
+    df = cmd_output2dataframe(output)
+    print(df)
+    # 导出线程名
+    # print(df['Command'])
+    # df[['Command']].to_csv('cmd.csv')
+    # 过滤业务线程
+    print('------过滤业务线程')
+    df['VM_THREAD'] = MonitorBoot().build_vm_thread_col(df)
+    # df.to_csv('d1.csv')
+    #df2 = df.loc[df['VM_THREAD']] # 过滤vm线程 -- []内部参数为bool值的series，可用于过滤行
+    df2 = df.loc[lambda x: x['VM_THREAD'] == False] # 过滤业务线程
+    # df2.to_csv('d2.csv')
+    print(df2)
+    print('------按cpu降序')
+    df3 = df2.sort_values(by='%CPU', ascending=False)
+    print(df3)
+    print(df3.head(2))
+    print(df3.iloc[0])
 
-    pid = get_pid_by_grep("java | com.intellij.idea.Main")
-    p = psutil.Process(int(pid))
-    print("p.cmdline(): " + str(p.cmdline()))
-    print("p.name(): " + str(p.name()))
-    print("p.cpu_percent(): " + str(p.cpu_percent()))
-    time.sleep(0.8)
-    print("p.cpu_percent(): " + str(p.cpu_percent()))
-    print("p.cpu_num(): " + str(p.cpu_num()))
-    print("p.memory_info(): " + str(p.memory_info()))
-    print("p.memory_percent(): " + str(p.memory_percent()))
-    print("p.open_files(): " + str(p.open_files()))
-    print("p.connections(): " + str(p.connections()))
-    print("p.is_running(): " + str(p.is_running()))
-
-    run_command(f'top -Hp ')
