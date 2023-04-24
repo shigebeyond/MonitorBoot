@@ -72,6 +72,8 @@ class MonitorBoot(YamlBoot):
             '>=': lambda val, param: float(val) >= float(param),
             '<=': lambda val, param: float(val) <= float(param),
         }
+        # 记录告警邮件的过期时间, key是告警条件(表示类型), value是过期时间，没过期就不发，用来限制同条件的告警邮件发送频率
+        self.alert_email_expires = {}
 
     # 执行完的后置处理
     def on_end(self):
@@ -142,19 +144,20 @@ class MonitorBoot(YamlBoot):
         set_var('when_alert', steps)
 
     # 告警处理
-    def alert(self, exprs):
-        if not isinstance(exprs, (str, list)):
+    def alert(self, conditions):
+        if not isinstance(conditions, (str, list)):
             raise Exception("告警参数必须str或list类型")
-        if isinstance(exprs, str):
-            exprs = [exprs]
+        if isinstance(conditions, str):
+            conditions = [conditions]
 
         try:
             # 1 逐个表达式来执行告警
-            for expr in exprs:
-                self.do_alert(expr)
+            for condition in conditions:
+                self.do_alert(condition)
         except Exception as ex:
             log.error(str(ex), exc_info = ex)
             set_var('alert_msg', str(ex))
+            set_var('alert_condition', condition)
             # 2 当发生告警异常要调用when_alert注册的动作
             steps = get_var('when_alert')
             if steps:
@@ -163,15 +166,16 @@ class MonitorBoot(YamlBoot):
             # 清空alert相关变量
             set_var('when_alert', None)
             set_var('alert_msg', None)
+            set_var('alert_condition', None)
 
-    def do_alert(self, expr):
+    def do_alert(self, condition):
         '''
         处理单个字段的告警，如果符合条件，则抛出报警异常
-        :param expr: 告警的条件表达式，只支持简单的三元表达式，操作符只支持 =, <, >, <=, >=
+        :param condition: 告警的条件表达式，只支持简单的三元表达式，操作符只支持 =, <, >, <=, >=
                如 mem_free <= 1024M
         '''
         # 分割字段+操作符+值
-        col, op, param = re.split(r'\s+', expr.strip(), 3)
+        col, op, param = re.split(r'\s+', condition.strip(), 3)
         # 获得col所在的对象
         if '.' not in col:
             col = 'sys.' + col
@@ -207,8 +211,23 @@ class MonitorBoot(YamlBoot):
         op = self.ops[op]
         return op(val, param)
 
-    # 发送告警邮件
-    def send_alert_email(self):
+    def send_alert_email(self, interval):
+        '''
+        发送告警邮件
+        :param interval: 间隔时间 = 同条件的告警邮件的过期时间(单位秒，默认60秒)，没过期就不发，用于限制同条件的告警邮件发送频率
+        '''
+        if not interval:
+            interval = 60
+        # 检查该条件的告警邮件是否没过期, 是的话就不发
+        condition = get_var('alert_condition')
+        now = time.time()
+        if condition in self.alert_email_expires \
+            and self.alert_email_expires[condition] < now: # 没过期就不发
+            log.info(f"在{interval}秒内忽略同条件[{condition}]的告警邮件")
+            return
+        self.alert_email_expires[condition] = now + interval # 更新过期时间
+
+        # 发邮件
         msg = get_var('alert_msg')
         if ':' in msg:
             title = substr_before(msg, ':')
@@ -309,7 +328,8 @@ class MonitorBoot(YamlBoot):
         # 3 选择第一个
         # 取前2个: print(df.head(2))
         # 取第1个: df.iloc[0]
-        row = df.iloc[0]
+        row = dict(df.iloc[0])
+        row['NID'] = hex(int(row['TID'])) # tid的16进制
         log.info(f"进程[{self.jpid}]中最繁忙的线程为: {row}")
 
     # 挑出等待很久的线程

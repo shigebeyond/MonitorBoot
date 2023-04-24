@@ -117,17 +117,3 @@ class SysInfo(object):
 if __name__ == '__main__':
     print("psutil.cpu_percent(): " + str(psutil.cpu_percent(None, percpu=True)))
     print("psutil.disk_io_counters(): " + str(psutil.disk_io_counters(perdisk=True)))
-    pid = get_pid_by_grep("java | com.intellij.idea.Main")
-    p = psutil.Process(int(pid))
-    print("p.cmdline(): " + str(p.cmdline()))
-    print("p.name(): " + str(p.name()))
-    # cpu_percent() 要不带参数，要不调用2次，中间sleep至少1秒，否则 cpu_percent()返回的值不准确
-    print("p.cpu_percent(): " + str(p.cpu_percent()))
-    time.sleep(0.8)
-    print("p.cpu_percent(): " + str(p.cpu_percent()))
-    print("p.cpu_num(): " + str(p.cpu_num()))
-    print("p.memory_info(): " + str(p.memory_info()))
-    print("p.memory_percent(): " + str(p.memory_percent()))
-    print("p.open_files(): " + str(p.open_files()))
-    print("p.connections(): " + str(p.connections()))
-    print("p.is_running(): " + str(p.is_running()))
