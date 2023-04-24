@@ -13,6 +13,7 @@ from pyutilb import YamlBoot, EventLoopThreadPool, ts
 from pyutilb.log import log
 from MonitorBoot import emailer
 from MonitorBoot.gc_log_parser import GcLogParser
+from MonitorBoot.procinfo import ProcInfo
 from MonitorBoot.sysinfo import SysInfo
 
 # 协程线程池
@@ -32,26 +33,35 @@ class MonitorBoot(YamlBoot):
             'when_alert': self.when_alert,
             'alert': self.alert,
             'send_alert_email': self.send_alert_email,
-            'monitor_jpid': self.monitor_jpid,
-            'grep_jpid': self.grep_jpid,
-            'dump_heap': self.dump_heap,
-            'dump_thread': self.dump_thread,
+            'monitor_pid': self.monitor_pid,
+            'grep_pid': self.grep_pid,
+            'dump_jvm_heap': self.dump_jvm_heap,
+            'dump_jvm_thread': self.dump_jvm_thread,
             'monitor_gc_log': self.monitor_gc_log,
-            'sys2csv': self.sys2csv,
+            'dump_sys': self.dump_sys,
         }
         self.add_actions(actions)
 
         # 当前ip
         self.ip = get_ip()
+
         # 创建调度器: 抄 SchedulerThread 的实现
         self.loop = asyncio.get_event_loop()
         self.scheduler = AsyncIOScheduler()
         self.scheduler._eventloop = self.loop  # 调度器的loop = 线程的loop, 否则线程无法处理调度器的定时任务
         self.scheduler.start()
+
         # tail跟踪
         self.tails = {}
+
         # gc日志解析器，只支持解析单个日志，没必要支持解析多个日志
         self.gc_parser = None
+
+        # 系统信息
+        self.sys = SysInfo()
+
+        # 进程信息: 延迟创建
+        self._proc = None
 
         # ----- 告警处理 -----
         # 告警字段
@@ -91,8 +101,8 @@ class MonitorBoot(YamlBoot):
 
     # 异步执行步骤：主要是优化 psutil.cpu_percent(1) 的阻塞带来的性能问题，要扔到eventloop所在的线程中运行
     async def run_steps_async(self, steps):
-        # 提前准备好SysInfo
-        sys = await SysInfo.prepare_fields_in_steps(steps)
+        # 提前预备好SysInfo
+        sys = await self.sys.presleep_fields_in_steps(steps)
         set_var('sys', sys)
 
         # 真正执行步骤
@@ -190,11 +200,15 @@ class MonitorBoot(YamlBoot):
             raise Exception(msg)
 
     def get_op_object(self, obj_name):
+        if 'sys' == obj_name:
+            return get_var('sys')
+        if 'proc' == obj_name:
+            return get_var('proc')
         if 'ygc' == obj_name:
             return self.check_current_gc(False)
-        if 'fgc'  == obj_name:
+        if 'fgc' == obj_name:
             return self.check_current_gc(True)
-        return get_var('sys')
+        raise Exception(f"Invalid object name: {obj_name}")
 
     def run_op(self, op, val, param):
         '''
@@ -238,18 +252,24 @@ class MonitorBoot(YamlBoot):
             'msg': msg,
         })
 
-    # -------------------------------- 监控java进程 -----------------------------------
-    # 监控的java进程id
+    # -------------------------------- 监控进程 -----------------------------------
+    # 监控的进程id
     @property
-    def jpid(self):
-        pid = get_var('jpid')
+    def pid(self):
+        pid = get_var('pid')
         if pid is None:
-            raise Exception("无jpid")
+            raise Exception("无pid")
         return pid
 
-    def monitor_jpid(self, options):
+    # 获得进程
+    def proc(self) -> ProcInfo:
+        if self._proc == None or self._proc.pid != self.pid:
+            self._proc = ProcInfo(self.pid)
+        return self._proc
+
+    def monitor_pid(self, options):
         '''
-        监控java进程，如果进程不存在，则抛异常
+        监控进程，如果进程不存在，则抛异常
         :param options 选项，包含
                     grep: 用ps aux搜索进程时要搜索的关键字
                     interval: 定时检查的时间间隔，用于定时检查进程是否还存在，为null则不检查
@@ -258,7 +278,7 @@ class MonitorBoot(YamlBoot):
         '''
         # 1 使用 ps aux | grep 来获得pid
         try:
-            self.grep_jpid(options['grep'])
+            self.grep_pid(options['grep'])
         except Exception as ex:
             # 2 当进程没运行时执行的步骤
             if 'when_no_run' in options and options['when_no_run'] is not None:
@@ -267,7 +287,7 @@ class MonitorBoot(YamlBoot):
 
         # 3 使用递归+延迟来实现定时检查
         interval = self.get_interval(options)
-        self.loop.call_later(interval, self.monitor_jpid, options)
+        self.loop.call_later(interval, self.monitor_pid, options)
 
     # 从选项中获得时间间隔
     def get_interval(self, options):
@@ -275,106 +295,18 @@ class MonitorBoot(YamlBoot):
             return int(options['interval'])
         return 10
 
-    def grep_jpid(self, grep):
+    def grep_pid(self, grep):
         '''
-        监控java进程，如果进程不存在，则抛异常
+        监控进程，如果进程不存在，则抛异常
         :param grep: 用ps aux搜索进程时要搜索的关键字，支持多个，用|分割
         :return:
         '''
         pid = get_pid_by_grep(grep)
         if pid is None:
-            raise Exception(f"不存在匹配的java进程: {grep}")
-        set_var('jpid', pid)
-
-    @pool.run_in_pool
-    async def dump_heap(self, filename_pref):
-        '''
-        生成堆快照
-        :param filename_pref: 文件名前缀
-        :return:
-        '''
-        try:
-            now = ts.now2str().replace(' ', '_')
-            file = f'{filename_pref}-{now}.hprof'
-            cmd = f'jmap -dump:live,format=b,file={file} {self.jpid}'
-            await run_command_async(cmd)
-            log.info(f"生成堆快照文件: {file}")
-        except Exception as ex:
-            log.error("MonitorBoot.dump_heap()异常: " + str(ex), exc_info=ex)
-
-    @pool.run_in_pool
-    async def dump_thread(self, filename_pref):
-        '''
-        生成线程栈
-        :param filename_pref: 文件名前缀
-        :return:
-        '''
-        try:
-            now = ts.now2str().replace(' ', '-')
-            file = f'{filename_pref}-{now}.stack'
-            cmd = f'jstack -l {self.jpid} > {file}'
-            await run_command_async(cmd)
-            log.info(f"生成线程栈文件: {file}")
-        except Exception as ex:
-            log.error("MonitorBoot.dump_thread()异常: " + str(ex), exc_info=ex)
-
-    # -------------------------------- 线程处理 -----------------------------------
-    # 挑出繁忙的线程： 用 pidstat -t -p pid
-    def pick_busy_thread(self):
-        # 1 获得线程
-        df = self.get_threads_df()
-        # 2 按cpu降序
-        df = df.sort_values(by='%CPU', ascending=False)
-        # 3 选择第一个
-        # 取前2个: print(df.head(2))
-        # 取第1个: df.iloc[0]
-        row = dict(df.iloc[0])
-        row['NID'] = hex(int(row['TID'])) # tid的16进制
-        log.info(f"进程[{self.jpid}]中最繁忙的线程为: {row}")
-
-    # 挑出等待很久的线程
-    def pick_wait_thread(self):
-        pass
-
-    # 通过 pidstat -t -p pid 来获得线程
-    def get_threads_df(self):
-        # 1 执行命令
-        output = run_command_async(f'pidstat -t -p {self.jpid}')
-        '''
-            输出如下，要干掉前两行
-            Linux 5.10.60-amd64-desktop (shi-PC) 	2023年04月23日 	_x86_64_	(6 CPU)
-    
-            11时28分27秒   UID      TGID       TID    %usr %system  %guest   %wait    %CPU   CPU  Command
-            11时28分27秒  1000      9702         -   19.37    0.50    0.00    0.00   19.87     0  java
-            11时28分27秒  1000         -      9702    0.00    0.00    0.00    0.00    0.00     0  |__java
-            '''
-        output = re.sub(r"^.+\n\n", '', output)
-        # 2 将命令结果转为df
-        df = cmd_output2dataframe(output)
-        # 3 过滤业务线程: 通过构建 VM_THREAD 列来过滤
-        df['VM_THREAD'] = self.build_vm_thread_col(df)
-        df2 = df.loc[lambda x: x['VM_THREAD'] == False]
-        del df2['VM_THREAD']
-        return df2
-
-    # 构建是否vm线程，非业务线程
-    def build_vm_thread_col(self, df):
-        ret = []
-        for i, row in df.iterrows():
-            # 第一条是进程而不是线程，如java且tid为-，不要
-            # 其他: vm线程不要
-            val = row['TID'] == '-' \
-                  or self.is_vm_thread(row['Command'])
-            ret.append(val)
-        return ret
-
-    # 是否vm线程，非业务线程
-    features = 'GC Thread#,G1 Main Marker,G1 Conc#,G1 Refine#,G1 Young RemSet,VM Thread,Reference Handl,Finalizer,Signal Dispatch,Service Thread,C2 CompilerThre,C1 CompilerThre,Sweeper thread,VM Periodic Tas,Common-Cleaner,process reaper,GC Thread#,GC Thread#,GC Thread#,GC Thread#,GC Thread#,G1 Refine#,G1 Conc#,G1 Refine#,G1 Refine#'.split(',')
-    def is_vm_thread(self, thread_name):
-        for f in self.features:
-            if f in thread_name:
-                return True
-        return False
+            raise Exception(f"不存在匹配[{grep}]的进程")
+        if "\n" in pid:
+            raise Exception(f"关键字[{grep}]匹配了多个进程: " + pid.replace('\n', ','))
+        set_var('pid', pid)
 
     # -------------------------------- 监控jvm(进程+gc日志+线程日志)的动作 -----------------------------------
     def monitor_gc_log(self, steps, file):
@@ -418,23 +350,77 @@ class MonitorBoot(YamlBoot):
 
         return gc
 
-    # -------------------------------- 输出到csv -----------------------------------
-    # 将系统信息存到csv中
+    # -------------------------------- dump -----------------------------------
     @pool.run_in_pool
-    async def sys2csv(self, _):
+    async def dump_jvm_heap(self, filename_pref):
+        '''
+        导出jvm堆快照
+        :param filename_pref: 文件名前缀
+        :return:
+        '''
+        try:
+            now = ts.now2str().replace(' ', '_')
+            file = f'{filename_pref}-{now}.hprof'
+            cmd = f'jmap -dump:live,format=b,file={file} {self.pid}'
+            await run_command_async(cmd)
+            log.info(f"导出堆快照文件: {file}")
+        except Exception as ex:
+            log.error("MonitorBoot.dump_jvm_heap()异常: " + str(ex), exc_info=ex)
+
+    @pool.run_in_pool
+    async def dump_jvm_thread(self, filename_pref):
+        '''
+        导出jvm线程栈
+        :param filename_pref: 文件名前缀
+        :return:
+        '''
+        try:
+            now = ts.now2str().replace(' ', '-')
+            file = f'{filename_pref}-{now}.stack'
+            cmd = f'jstack -l {self.pid} > {file}'
+            await run_command_async(cmd)
+            log.info(f"导出线程栈文件: {file}")
+        except Exception as ex:
+            log.error("MonitorBoot.dump_jvm_thread()异常: " + str(ex), exc_info=ex)
+
+    # 将系统信息导出到csv
+    @pool.run_in_pool
+    async def dump_sys(self, filename_pref):
+        if filename_pref is None:
+            filename_pref = 'Sys'
         try:
             now = ts.now2str()
             today, time = now.split(' ')
-            file = f'MointorBoot{today}.csv'
+            file = f'{filename_pref}-{today}.csv'
             if not os.path.exists(file):
                 cols = ['date', 'time', 'cpu%/s', 'mem_used(MB)', 'disk_read(MB/s)', 'disk_write(MB/s)', 'net_sent(MB/s)', 'net_recv(MB/s)']
                 self.append_csv_row(file, cols)
 
-            sys = await SysInfo.prepare_all_fields()
+            sys = await self.sys.presleep_all_fields()
             row = [today, time, sys.cpu_percent, sys.mem_used, sys.disk_read, sys.disk_write, sys.net_sent, sys.net_recv]
             self.append_csv_row(file, row)
         except Exception as ex:
-            log.error("MonitorBoot.sys2csv()异常: " + str(ex), exc_info=ex)
+            log.error("MonitorBoot.dump_sys()异常: " + str(ex), exc_info=ex)
+
+    # 将进程信息导出到csv
+    @pool.run_in_pool
+    async def dump_proc(self, filename_pref):
+        if filename_pref is None:
+            filename_pref = 'Process'
+        try:
+            now = ts.now2str()
+            today, time = now.split(' ')
+            proc = self.proc(self.pid)
+            file = f'{filename_pref}-{proc.name}[{self.pid}]-{today}.csv'
+            if not os.path.exists(file):
+                cols = ['date', 'time', 'cpu%/s', 'mem_used(MB)', 'mem%', 'status']
+                self.append_csv_row(file, cols)
+
+            await proc.presleep_all_fields()
+            row = [today, time, proc.cpu_percent, proc.mem_used, proc.mem_percent, proc.status]
+            self.append_csv_row(file, row)
+        except Exception as ex:
+            log.error("MonitorBoot.dump_proc()异常: " + str(ex), exc_info=ex)
 
     def append_csv_row(self, file, line):
         with open(file, 'a+', encoding='utf-8', newline='') as file_obj:
@@ -461,35 +447,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    # output = run_command(f'pidstat -t -p 9702')
-    '''
-    输出如下，要干掉前两行
-    Linux 5.10.60-amd64-desktop (shi-PC) 	2023年04月23日 	_x86_64_	(6 CPU)
-
-    11时28分27秒   UID      TGID       TID    %usr %system  %guest   %wait    %CPU   CPU  Command
-    11时28分27秒  1000      9702         -   19.37    0.50    0.00    0.00   19.87     0  java
-    11时28分27秒  1000         -      9702    0.00    0.00    0.00    0.00    0.00     0  |__java
-    '''
-    '''
-    # re.search(r"^[\n]+\n\n", output)
-    output = re.sub(r"^.+\n\n", '', output)
-    print(output)
-    df = cmd_output2dataframe(output)
-    print(df)
-    # 导出线程名
-    # print(df['Command'])
-    # df[['Command']].to_csv('cmd.csv')
-    # 过滤业务线程
-    print('------过滤业务线程')
-    df['VM_THREAD'] = MonitorBoot().build_vm_thread_col(df)
-    # df.to_csv('d1.csv')
-    #df2 = df.loc[df['VM_THREAD']] # 过滤vm线程 -- []内部参数为bool值的series，可用于过滤行
-    df2 = df.loc[lambda x: x['VM_THREAD'] == False] # 过滤业务线程
-    # df2.to_csv('d2.csv')
-    print(df2)
-    print('------按cpu降序')
-    df3 = df2.sort_values(by='%CPU', ascending=False)
-    print(df3)
-    print(df3.head(2))
-    print(df3.iloc[0])
-    '''

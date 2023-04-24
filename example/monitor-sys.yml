@@ -1,0 +1,25 @@
+# 定时导出系统信息
+- schedule(5):
+    - dump_sys:
+
+# 定时导出进程信息
+- grep_pid: java | visualvm
+- schedule(5):
+    - dump_proc:
+
+# 定时做系统告警
+- schedule(10):
+    - when_alert: # 发生告警时要执行以下步骤
+        - dump_jvm_heap: 'dump告警内存' # dump堆快照
+        - send_alert_email: # 发告警邮件
+    - alert: # 告警
+        # 告警条件
+        - mem_free <= 1024M # 剩余内存 <= 1024M
+- schedule(10):
+    - when_alert: # 发生告警时要执行以下步骤
+        - dump_jvm_thread: # dump线程快照
+        - send_alert_email: # 发告警邮件
+    - alert: # 告警
+        # 告警条件
+        - cpu_percent >= 90 # cpu使用率 >= 90%
+        # - disk_percent >= 90 # 磁盘使用率 >= 90%

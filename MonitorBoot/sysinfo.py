@@ -4,43 +4,54 @@ import psutil
 from pyutilb.cmd import get_pid_by_grep
 from pyutilb.lazy import lazyproperty
 
+# 为了预备指标，需要提前睡1s
+class PresleepMixin(object):
+    # 预备所有指标
+    async def presleep_all_fields(self):
+        # 重置预备字段
+        self.reset_presleep_field()
+
+        # 检查是否要预备睡1s
+        for field in self.sleep_fields:
+            need_sleep = self.has_presleep_field(field)
+        # 睡1s
+        if need_sleep:
+            await asyncio.sleep(1)
+        return self
+
+    # 在执行步骤前，提前预备指标
+    async def presleep_fields_in_steps(self, steps):
+        # 重置预备字段
+        self.reset_presleep_field()
+
+        # 检查是否要预备睡1s
+        need_sleep = False
+        for step in steps:
+            if 'alert' in step:  # alert动作
+                for expr in step['alert']:  # alert参数是表达式
+                    need_sleep = need_sleep or self.has_presleep_field(expr)
+        # 睡1s
+        if need_sleep:
+            await asyncio.sleep(1)
+        return self
+
 # 系统信息，如cpu/内存/磁盘等
-class SysInfo(object):
+class SysInfo(PresleepMixin):
 
     # 要睡1s的字段
     sleep_fields = 'cpu_percent|dio|nio'.split('|')
-
-    # 准备所有指标
-    @classmethod
-    async def prepare_all_fields(cls):
-        sys = SysInfo()
-        for field in SysInfo.sleep_fields:
-            need_sleep = sys.do_prepare_field(field)
-        # 睡1s
-        if need_sleep:
-            await asyncio.sleep(1)
-        return sys
-
-    # 在执行步骤前，提前准备指标
-    @classmethod
-    async def prepare_fields_in_steps(cls, steps):
-        sys = SysInfo()
-        need_sleep = False
-        for step in steps:
-            if 'alert' in step: # alert动作
-                for expr in step['alert']: # alert参数是告警表达式
-                    need_sleep = need_sleep or sys.do_prepare_field(expr)
-        # 睡1s
-        if need_sleep:
-            await asyncio.sleep(1)
-        return sys
 
     def __init__(self):
         self.last_dio = None # 记录上一秒磁盘io统计(读写字节数)，以便通过下一秒的值的对比来计算读写速率
         self.last_nio = None # 记录上一秒网络io统计(读写字节数)，以便通过下一秒的值的对比来计算读写速率
 
-    # 准备：部分指标需要隔1秒调2次，以便通过通过下一秒的值的对比来计算指标值
-    def do_prepare_field(self, expr):
+    # 重置预备的字段
+    def reset_presleep_field(self):
+        self.last_dio = None
+        self.last_nio = None
+
+    # 预备：部分指标需要隔1秒调2次，以便通过通过下一秒的值的对比来计算指标值
+    def has_presleep_field(self, expr):
         if 'cpu_percent' in expr:
             # 1 对 psutil.cpu_percent(interval)，当interval不为空，则阻塞
             # psutil.cpu_percent(1) # 会阻塞1s
@@ -88,13 +99,13 @@ class SysInfo(object):
     def net_sent(self):
         return self.nio.bytes_sent - self.last_nio.bytes_sent
 
-    # 告警已使用内存
+    # 已使用内存
     @property
     def mem_used(self):
         memory_info = psutil.virtual_memory()
         return memory_info.used
 
-    # 告警可用内存
+    # 可用内存
     @property
     def mem_free(self):
         # free 是真正尚未被使用的物理内存数量。
@@ -102,12 +113,18 @@ class SysInfo(object):
         memory_info = psutil.virtual_memory()
         return memory_info.free
 
-    # 告警cpu使用率
+    # 内存使用率
+    @property
+    def mem_percent(self):
+        memory_info = psutil.virtual_memory()
+        return memory_info.percent
+
+    # cpu使用率
     @property
     def cpu_percent(self):
         return psutil.cpu_percent()
 
-    # 告警磁盘使用率
+    # 磁盘使用率
     @property
     def disk_percent(self):
         disk_info = psutil.disk_usage("/")  # 根目录磁盘信息
@@ -115,5 +132,6 @@ class SysInfo(object):
 
 
 if __name__ == '__main__':
+    print("psutil.psutil.disk_usage(): " + str(psutil.disk_usage("/")))
     print("psutil.cpu_percent(): " + str(psutil.cpu_percent(None, percpu=True)))
     print("psutil.disk_io_counters(): " + str(psutil.disk_io_counters(perdisk=True)))
