@@ -8,7 +8,7 @@ from pyutilb.lazy import lazyproperty
 class SysInfo(object):
 
     # 要睡1s的字段
-    sleep_fields = 'cpu_percent|dio|noi'.split('|')
+    sleep_fields = 'cpu_percent|dio|nio'.split('|')
 
     # 准备所有指标
     @classmethod
@@ -81,12 +81,12 @@ class SysInfo(object):
     # 接收速率 = 当前接收字节数 - 上一秒接收字节数
     @property
     def net_recv(self):
-        return self.nio.bytes_recv - self.last_dio.bytes_recv
+        return self.nio.bytes_recv - self.last_nio.bytes_recv
 
     # 发送速率 = 当前发送字节数 - 上一秒发送字节数
     @property
     def net_sent(self):
-        return self.nio.bytes_sent - self.last_dio.bytes_sent
+        return self.nio.bytes_sent - self.last_nio.bytes_sent
 
     # 告警已使用内存
     @property

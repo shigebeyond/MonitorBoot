@@ -153,8 +153,8 @@ class MonitorBoot(YamlBoot):
             for expr in exprs:
                 self.do_alert(expr)
         except Exception as ex:
-            log.error(ex.msg, exc_info = ex)
-            set_var('alert_msg', ex.msg)
+            log.error(str(ex), exc_info = ex)
+            set_var('alert_msg', str(ex))
             # 2 当发生告警异常要调用when_alert注册的动作
             steps = get_var('when_alert')
             if steps:
@@ -274,11 +274,14 @@ class MonitorBoot(YamlBoot):
         :param filename_pref: 文件名前缀
         :return:
         '''
-        now = ts.now2str().replace(' ', '_')
-        file = f'{filename_pref}-{now}.hprof'
-        cmd = f'jmap -dump:live,format=b,file={file} {self.jpid}'
-        await run_command_async(cmd)
-        log.info(f"生成堆快照文件: {file}")
+        try:
+            now = ts.now2str().replace(' ', '_')
+            file = f'{filename_pref}-{now}.hprof'
+            cmd = f'jmap -dump:live,format=b,file={file} {self.jpid}'
+            await run_command_async(cmd)
+            log.info(f"生成堆快照文件: {file}")
+        except Exception as ex:
+            log.error("MonitorBoot.dump_heap()异常: " + str(ex), exc_info=ex)
 
     @pool.run_in_pool
     async def dump_thread(self, filename_pref):
@@ -287,11 +290,14 @@ class MonitorBoot(YamlBoot):
         :param filename_pref: 文件名前缀
         :return:
         '''
-        now = ts.now2str().replace(' ', '-')
-        file = f'{filename_pref}-{now}.stack'
-        cmd = f'jstack -l {self.jpid} > {file}'
-        await run_command_async(cmd)
-        log.info(f"生成线程栈文件: {file}")
+        try:
+            now = ts.now2str().replace(' ', '-')
+            file = f'{filename_pref}-{now}.stack'
+            cmd = f'jstack -l {self.jpid} > {file}'
+            await run_command_async(cmd)
+            log.info(f"生成线程栈文件: {file}")
+        except Exception as ex:
+            log.error("MonitorBoot.dump_thread()异常: " + str(ex), exc_info=ex)
 
     # -------------------------------- 线程处理 -----------------------------------
     # 挑出繁忙的线程： 用 pidstat -t -p pid
@@ -396,15 +402,19 @@ class MonitorBoot(YamlBoot):
     # 将系统信息存到csv中
     @pool.run_in_pool
     async def sys2csv(self, _):
-        today = ts.today()
-        file = f'MointorBoot{today}.csv'
-        if not os.path.exists(file):
-            cols = ['date', 'time', 'cpu%/s', 'mem_used(MB)', 'disk_read(MB/s)', 'disk_write(MB/s)', 'net_sent(MB/s)', 'net_recv(MB/s)']
-            self.append_csv_row(file, cols)
+        try:
+            now = ts.now2str()
+            today, time = now.split(' ')
+            file = f'MointorBoot{today}.csv'
+            if not os.path.exists(file):
+                cols = ['date', 'time', 'cpu%/s', 'mem_used(MB)', 'disk_read(MB/s)', 'disk_write(MB/s)', 'net_sent(MB/s)', 'net_recv(MB/s)']
+                self.append_csv_row(file, cols)
 
-        sys = await SysInfo.prepare_all_fields()
-        row = [today, ts.now(), sys.cpu_percent, sys.mem_used, sys.disk_read, sys.disk_write, sys.net_sent, sys.net_recv]
-        self.append_csv_row(file, row)
+            sys = await SysInfo.prepare_all_fields()
+            row = [today, time, sys.cpu_percent, sys.mem_used, sys.disk_read, sys.disk_write, sys.net_sent, sys.net_recv]
+            self.append_csv_row(file, row)
+        except Exception as ex:
+            log.error("MonitorBoot.sys2csv()异常: " + str(ex), exc_info=ex)
 
     def append_csv_row(self, file, line):
         with open(file, 'a+', encoding='utf-8', newline='') as file_obj:
