@@ -22,12 +22,8 @@ class ProcInfo(PresleepMixin):
 
         self.last_dio = None  # 记录上一秒磁盘io统计(读写字节数)，以便通过下一秒的值的对比来计算读写速率
 
-    # 重置预备的字段
-    def reset_presleep_field(self):
-        self.last_dio = None
-
     # 预备：部分指标需要隔1秒调2次，以便通过通过下一秒的值的对比来计算指标值
-    def has_presleep_field(self, expr):
+    def presleep_field(self, expr):
         if 'cpu_percent' in expr:
             # 1 对 self.proc.cpu_percent(interval)，当interval不为空，则阻塞
             # self.proc.cpu_percent(1) # 会阻塞1s

@@ -8,15 +8,10 @@ from pyutilb.lazy import lazyproperty
 class PresleepMixin(object):
     # 预备所有指标
     async def presleep_all_fields(self):
-        # 重置预备字段
-        self.reset_presleep_field()
-
         # 检查是否要预备睡1s
         need_sleep = False
         for field in self.sleep_fields:
-            if self.has_presleep_field(field):
-                need_sleep = True
-                break
+            need_sleep = self.presleep_field(field) or need_sleep
         # 睡1s
         if need_sleep:
             await asyncio.sleep(1)
@@ -24,17 +19,12 @@ class PresleepMixin(object):
 
     # 在执行步骤前，提前预备指标
     async def presleep_fields_in_steps(self, steps):
-        # 重置预备字段
-        self.reset_presleep_field()
-
         # 检查是否要预备睡1s
         need_sleep = False
         for step in steps:
             if 'alert' in step:  # alert动作
                 for expr in step['alert']:  # alert参数是表达式
-                    if self.has_presleep_field(expr):
-                        need_sleep = True
-                        break
+                    need_sleep = self.presleep_field(expr) or need_sleep
         # 睡1s
         if need_sleep:
             await asyncio.sleep(1)
@@ -50,13 +40,8 @@ class SysInfo(PresleepMixin):
         self.last_dio = None # 记录上一秒磁盘io统计(读写字节数)，以便通过下一秒的值的对比来计算读写速率
         self.last_nio = None # 记录上一秒网络io统计(读写字节数)，以便通过下一秒的值的对比来计算读写速率
 
-    # 重置预备的字段
-    def reset_presleep_field(self):
-        self.last_dio = None
-        self.last_nio = None
-
     # 预备：部分指标需要隔1秒调2次，以便通过通过下一秒的值的对比来计算指标值
-    def has_presleep_field(self, expr):
+    def presleep_field(self, expr):
         if 'cpu_percent' in expr:
             # 1 对 psutil.cpu_percent(interval)，当interval不为空，则阻塞
             # psutil.cpu_percent(1) # 会阻塞1s

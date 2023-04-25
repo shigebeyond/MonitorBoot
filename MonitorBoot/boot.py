@@ -58,9 +58,6 @@ class MonitorBoot(YamlBoot):
         # gc日志解析器，只支持解析单个日志，没必要支持解析多个日志
         self.gc_parser = None
 
-        # 系统信息
-        self.sys = SysInfo()
-
         # 进程信息
         self._pid = None
         self._proc = None # 延迟创建
@@ -104,7 +101,7 @@ class MonitorBoot(YamlBoot):
     # 异步执行步骤：主要是优化 psutil.cpu_percent(1) 的阻塞带来的性能问题，要扔到eventloop所在的线程中运行
     async def run_steps_async(self, steps, vars = {}):
         # 提前预备好SysInfo
-        sys = await self.sys.presleep_fields_in_steps(steps)
+        sys = await SysInfo().presleep_fields_in_steps(steps)
         vars['sys'] = sys
 
         # 应用变量，因为变量是在ThreadLocal中，只能在同步代码中应用
@@ -266,7 +263,7 @@ class MonitorBoot(YamlBoot):
             raise Exception("无pid")
         return self._pid
 
-    # 获得进程
+    # 获得进程，不能定义为属性，否则于 YamlBoot.proc 动作冲突
     def proc(self) -> ProcInfo:
         if self._proc == None or self._proc.pid != self.pid:
             self._proc = ProcInfo(self.pid)
@@ -400,7 +397,7 @@ class MonitorBoot(YamlBoot):
                 cols = ['date', 'time', 'cpu%/s', 'mem_used(MB)', 'disk_read(MB/s)', 'disk_write(MB/s)', 'net_sent(MB/s)', 'net_recv(MB/s)']
                 self.append_csv_row(file, cols)
 
-            sys = await self.sys.presleep_all_fields()
+            sys = await SysInfo().presleep_all_fields()
             row = [today, time, sys.cpu_percent, sys.mem_used, sys.disk_read, sys.disk_write, sys.net_sent, sys.net_recv]
             self.append_csv_row(file, row)
         except Exception as ex:
@@ -414,7 +411,7 @@ class MonitorBoot(YamlBoot):
         try:
             now = ts.now2str()
             today, time = now.split(' ')
-            proc = self.proc
+            proc = self.proc()
             file = f'{filename_pref}-{proc.name}[{self.pid}]-{today}.csv'
             if not os.path.exists(file):
                 cols = ['date', 'time', 'cpu%/s', 'mem_used(MB)', 'mem%', 'status']
