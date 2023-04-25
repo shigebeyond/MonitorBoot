@@ -23,6 +23,11 @@ sdb              7.44   12.02    296.64    616.39     1.33    14.19  15.18  54.1
     # 2 将命令结果转为df
     return cmd_output2dataframe(output, 5)  # 干掉5行
 
+# 获得最高磁盘io频率(一秒中有百分之多少的时间用于I/O操作)
+async def max_disk_util():
+    df = get_disk_io_df()
+    return df['%util'].max()
+
 # -------------------------------- 进程cpu统计 -----------------------------------
 # 通过 pidstat 来获得进程的cpu统计信息，用于找到cpu多的进程
 async def get_process_cpu_df():

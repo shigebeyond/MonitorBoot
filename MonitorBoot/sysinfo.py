@@ -12,8 +12,11 @@ class PresleepMixin(object):
         self.reset_presleep_field()
 
         # 检查是否要预备睡1s
+        need_sleep = False
         for field in self.sleep_fields:
-            need_sleep = self.has_presleep_field(field)
+            if self.has_presleep_field(field):
+                need_sleep = True
+                break
         # 睡1s
         if need_sleep:
             await asyncio.sleep(1)
@@ -29,7 +32,9 @@ class PresleepMixin(object):
         for step in steps:
             if 'alert' in step:  # alert动作
                 for expr in step['alert']:  # alert参数是表达式
-                    need_sleep = need_sleep or self.has_presleep_field(expr)
+                    if self.has_presleep_field(expr):
+                        need_sleep = True
+                        break
         # 睡1s
         if need_sleep:
             await asyncio.sleep(1)

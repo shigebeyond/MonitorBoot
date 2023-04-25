@@ -39,6 +39,7 @@ class MonitorBoot(YamlBoot):
             'dump_jvm_thread': self.dump_jvm_thread,
             'monitor_gc_log': self.monitor_gc_log,
             'dump_sys': self.dump_sys,
+            'dump_proc': self.dump_proc,
         }
         self.add_actions(actions)
 
@@ -60,8 +61,9 @@ class MonitorBoot(YamlBoot):
         # 系统信息
         self.sys = SysInfo()
 
-        # 进程信息: 延迟创建
-        self._proc = None
+        # 进程信息
+        self._pid = None
+        self._proc = None # 延迟创建
 
         # ----- 告警处理 -----
         # 告警字段
@@ -100,15 +102,17 @@ class MonitorBoot(YamlBoot):
         emailer.send_email(params['title'], params['msg'])
 
     # 异步执行步骤：主要是优化 psutil.cpu_percent(1) 的阻塞带来的性能问题，要扔到eventloop所在的线程中运行
-    async def run_steps_async(self, steps):
+    async def run_steps_async(self, steps, vars = {}):
         # 提前预备好SysInfo
         sys = await self.sys.presleep_fields_in_steps(steps)
-        set_var('sys', sys)
+        vars['sys'] = sys
 
-        # 真正执行步骤
-        name = threading.current_thread()  # MainThread
-        print(f"thread[{name}]执行步骤")
-        self.run_steps(steps)
+        # 应用变量，因为变量是在ThreadLocal中，只能在同步代码中应用
+        with UseVars(vars):
+            # 真正执行步骤
+            name = threading.current_thread()  # MainThread
+            print(f"thread[{name}]执行步骤")
+            self.run_steps(steps)
 
     def schedule(self, steps, wait_seconds):
         '''
@@ -129,11 +133,9 @@ class MonitorBoot(YamlBoot):
         '''
         async def read_line(line):
             # 将行塞到变量中，以便子步骤能读取
-            set_var('tail_line', line)
+            vars = {'tail_line': line}
             # 执行子步骤
-            await self.run_steps_async(steps)
-            # 清理变量
-            set_var('tail_line', None)
+            await self.run_steps_async(steps, vars)
         self.do_tail(file, read_line)
 
     def do_tail(self, file, callback):
@@ -218,6 +220,10 @@ class MonitorBoot(YamlBoot):
         :param param: 参数
         :return:
         '''
+        # 处理参数: 文件大小字符串换算为字节数
+        if param[-1] in file_size_units:
+           param = file_size2bytes(param)
+        # 校验操作符
         if op not in self.ops:
             raise Exception(f'Invalid validate operator: {op}')
         # 调用校验函数
@@ -256,10 +262,9 @@ class MonitorBoot(YamlBoot):
     # 监控的进程id
     @property
     def pid(self):
-        pid = get_var('pid')
-        if pid is None:
+        if self._pid is None:
             raise Exception("无pid")
-        return pid
+        return self._pid
 
     # 获得进程
     def proc(self) -> ProcInfo:
@@ -306,7 +311,8 @@ class MonitorBoot(YamlBoot):
             raise Exception(f"不存在匹配[{grep}]的进程")
         if "\n" in pid:
             raise Exception(f"关键字[{grep}]匹配了多个进程: " + pid.replace('\n', ','))
-        set_var('pid', pid)
+        log.info(f"关键字[{grep}]匹配进程: {pid}")
+        self._pid = pid
 
     # -------------------------------- 监控jvm(进程+gc日志+线程日志)的动作 -----------------------------------
     def monitor_gc_log(self, steps, file):
@@ -326,11 +332,9 @@ class MonitorBoot(YamlBoot):
             gc = self.gc_parser.parse_gc_line(line)
             if gc != None:
                 # 将gc信息塞到变量中，以便子步骤能读取
-                set_var('gc', gc)
+                vars = {'gc': gc}
                 # 执行子步骤
-                await self.run_steps_async(steps)
-                # 清理变量
-                set_var('gc', None)
+                await self.run_steps_async(steps, vars)
         self.do_tail(file, read_line)
 
     def check_current_gc(self, is_full):
@@ -410,7 +414,7 @@ class MonitorBoot(YamlBoot):
         try:
             now = ts.now2str()
             today, time = now.split(' ')
-            proc = self.proc(self.pid)
+            proc = self.proc
             file = f'{filename_pref}-{proc.name}[{self.pid}]-{today}.csv'
             if not os.path.exists(file):
                 cols = ['date', 'time', 'cpu%/s', 'mem_used(MB)', 'mem%', 'status']
