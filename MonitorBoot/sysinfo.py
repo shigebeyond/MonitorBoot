@@ -9,17 +9,15 @@ class PresleepMixin(object):
     # 预备所有指标
     async def presleep_all_fields(self):
         # 检查是否要预备睡1s
-        need_sleep = False
         for field in self.sleep_fields:
-            need_sleep = self.presleep_field(field) or need_sleep
+            self.presleep_field(field)
         # 睡1s
-        if need_sleep:
-            await asyncio.sleep(1)
+        await asyncio.sleep(1)
         return self
 
     # 在执行步骤前，提前预备指标
     async def presleep_fields_in_steps(self, steps):
-        # 检查是否要预备睡1s
+        # 逐个alert条件来预备相关字段
         need_sleep = False
         for step in steps:
             if 'alert' in step:  # alert动作

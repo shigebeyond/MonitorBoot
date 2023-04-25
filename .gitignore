@@ -7,5 +7,6 @@ downloads/
 build/
 HttpBoot.egg-info/
 dist/
+data/
 boot.log*
 stat.yml

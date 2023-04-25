@@ -15,11 +15,6 @@ class ProcInfo(PresleepMixin):
 
     def __init__(self, pid):
         self.pid = pid
-        self.proc = psutil.Process(int(pid))
-        if self.proc.status() not in (psutil.STATUS_RUNNING, psutil.STATUS_SLEEPING):
-            log.error(f"进程[{pid}]没运行")
-            self.proc = None
-
         self.last_dio = None  # 记录上一秒磁盘io统计(读写字节数)，以便通过下一秒的值的对比来计算读写速率
 
     # 预备：部分指标需要隔1秒调2次，以便通过通过下一秒的值的对比来计算指标值
@@ -37,6 +32,15 @@ class ProcInfo(PresleepMixin):
 
         return False
 
+    # 延迟创建，因为ProcInfo要提前创建但不一定使用，而psutil.Process()比较重，就延迟创建了
+    @lazyproperty
+    def proc(self):
+        proc = psutil.Process(int(self.pid))
+        if proc.status() not in (psutil.STATUS_RUNNING, psutil.STATUS_SLEEPING):
+            log.error(f"进程[{self.pid}]没运行")
+            return None
+        return proc
+
     # 是否java进程
     def is_java(self):
         return self.proc.name == "java" \
@@ -45,11 +49,12 @@ class ProcInfo(PresleepMixin):
     # 进程名
     @property
     def name(self):
-        ret = self.proc.name
+        ret = self.proc.name()
         if ret == "java":
-            for p in self.proc.cmdline[1:]:
+            cl = self.proc.cmdline()
+            for p in cl[1:]:
                 if not p.startswith('-'): # 忽略选项，返回主类
-                    return p
+                    return cl[-1]
         return ret
 
     # 进程状态

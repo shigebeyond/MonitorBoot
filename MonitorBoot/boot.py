@@ -399,6 +399,8 @@ class MonitorBoot(YamlBoot):
 
             sys = await SysInfo().presleep_all_fields()
             row = [today, time, sys.cpu_percent, sys.mem_used, sys.disk_read, sys.disk_write, sys.net_sent, sys.net_recv]
+            for i in range(3, len(row)):
+                row[i] = bytes2file_size(row[i], 'M', False)
             self.append_csv_row(file, row)
         except Exception as ex:
             log.error("MonitorBoot.dump_sys()异常: " + str(ex), exc_info=ex)
@@ -407,18 +409,18 @@ class MonitorBoot(YamlBoot):
     @pool.run_in_pool
     async def dump_proc(self, filename_pref):
         if filename_pref is None:
-            filename_pref = 'Process'
+            filename_pref = 'Proc'
         try:
             now = ts.now2str()
             today, time = now.split(' ')
             proc = self.proc()
-            file = f'{filename_pref}-{proc.name}[{self.pid}]-{today}.csv'
+            file = f'{filename_pref}-{self.pid}-{today}.csv'
             if not os.path.exists(file):
                 cols = ['date', 'time', 'cpu%/s', 'mem_used(MB)', 'mem%', 'status']
                 self.append_csv_row(file, cols)
 
             await proc.presleep_all_fields()
-            row = [today, time, proc.cpu_percent, proc.mem_used, proc.mem_percent, proc.status]
+            row = [today, time, proc.cpu_percent, bytes2file_size(proc.mem_used, 'M', False), proc.mem_percent, proc.status]
             self.append_csv_row(file, row)
         except Exception as ex:
             log.error("MonitorBoot.dump_proc()异常: " + str(ex), exc_info=ex)
