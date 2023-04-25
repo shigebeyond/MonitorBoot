@@ -1,4 +1,7 @@
 import asyncio
+import time
+
+import psutil
 from pyutilb.cmd import run_command, cmd_output2dataframe, run_command_async
 from pyutilb.log import log
 
@@ -41,12 +44,19 @@ async def get_process_cpu_df():
     # 2 将命令结果转为df
     return cmd_output2dataframe(output, 2)  # 干掉2行
 
+# 将df按列排序
+def order_df(df, by, asc):
+    df[by] = df[by].apply(float) # 排序列要先转为数值
+    return df.sort_values(by=by, ascending=asc) # 按列排序
+
 # 获得cpu最忙的进程id
 async def top_cpu_process():
     # 1 获得进程
     df = await get_process_cpu_df()
+    print(df)
     # 2 按%CPU降序
-    df = df.sort_values(by='%CPU', ascending=False)
+    df = order_df(df, '%CPU', False)
+    print(df)
     # 3 选择第一个
     row = dict(df.iloc[0])
     log.info(f"cpu最忙的进程为: {row}")
@@ -69,7 +79,7 @@ async def top_mem_process():
     # 1 获得进程
     df = await get_process_mem_df()
     # 2 按%mem降序
-    df = df.sort_values(by='%mem', ascending=False)
+    df = order_df(df, '%mem', False)
     # 3 选择第一个
     row = dict(df.iloc[0])
     log.info(f"mem最忙的进程为: {row}")
@@ -111,7 +121,7 @@ async def top_cpu_thread(pid):
     # 1 获得线程
     df = await get_threads_df(pid)
     # 2 按cpu降序
-    df = df.sort_values(by='%CPU', ascending=False)
+    df = order_df(df, '%CPU', False)
     # 3 选择第一个
     # 取前2个: print(df.head(2))
     # 取第1个: df.iloc[0]
@@ -173,8 +183,6 @@ async def test():
     # df = await get_threads_df(pid)
     # print(df)
     t = await top_cpu_thread(pid)
-
-
 
 if __name__ == '__main__':
     asyncio.run(test())

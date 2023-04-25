@@ -60,7 +60,7 @@ class MonitorBoot(YamlBoot):
 
         # 进程信息
         self._pid = None
-        self._proc = None # 延迟创建
+        self._pname = None
 
         # ----- 告警处理 -----
         # 告警字段
@@ -91,12 +91,21 @@ class MonitorBoot(YamlBoot):
 
     # -------------------------------- 普通动作 -----------------------------------
     # 配置邮件服务器
+    # :param config 包含host, password, from_name, from_email, to_name, to_email
     def config_email(self, config):
+        config = replace_var(config, False)
         emailer.config_email(config)
 
     # 发送邮件
     def send_email(self, params):
-        emailer.send_email(params['title'], params['msg'])
+        self.do_send_email(params['title'], params['msg'])
+
+    # 真正的发邮件
+    def do_send_email(self, title, msg):
+        if self.debug:
+            log.info(f"----- 调试模式下模拟发邮件: title = {title}, msg = {msg} -----")
+            return
+        emailer.send_email(title, msg)
 
     # 异步执行步骤：主要是优化 psutil.cpu_percent(1) 的阻塞带来的性能问题，要扔到eventloop所在的线程中运行
     async def run_steps_async(self, steps, vars = {}):
@@ -107,8 +116,8 @@ class MonitorBoot(YamlBoot):
         # 应用变量，因为变量是在ThreadLocal中，只能在同步代码中应用
         with UseVars(vars):
             # 真正执行步骤
-            name = threading.current_thread()  # MainThread
-            print(f"thread[{name}]执行步骤")
+            # name = threading.current_thread()  # MainThread
+            # print(f"thread[{name}]执行步骤")
             self.run_steps(steps)
 
     def schedule(self, steps, wait_seconds):
@@ -164,8 +173,9 @@ class MonitorBoot(YamlBoot):
             for condition in conditions:
                 self.do_alert(condition)
         except Exception as ex:
-            log.error(str(ex), exc_info = ex)
-            set_var('alert_msg', str(ex))
+            msg = str(ex)
+            log.error(msg)
+            set_var('alert_msg', msg)
             set_var('alert_condition', condition)
             # 2 当发生告警异常要调用when_alert注册的动作
             steps = get_var('when_alert')
@@ -224,22 +234,25 @@ class MonitorBoot(YamlBoot):
         if op not in self.ops:
             raise Exception(f'Invalid validate operator: {op}')
         # 调用校验函数
-        log.debug(f"Call validate operator: {op}={param}")
+        # log.debug(f"Call operator: {op}={param}")
         op = self.ops[op]
         return op(val, param)
 
     def send_alert_email(self, interval):
         '''
         发送告警邮件
-        :param interval: 间隔时间 = 同条件的告警邮件的过期时间(单位秒，默认60秒)，没过期就不发，用于限制同条件的告警邮件发送频率
+        :param interval: 间隔时间 = 同条件的告警邮件的过期时间(单位秒，默认600秒)，没过期就不发，用于限制同条件的告警邮件发送频率
         '''
         if not interval:
-            interval = 60
+            interval = 600
         # 检查该条件的告警邮件是否没过期, 是的话就不发
         condition = get_var('alert_condition')
+        if condition is None:
+            log.info("无告警发生，无需发告警邮件")
+            return
         now = time.time()
         if condition in self.alert_email_expires \
-            and self.alert_email_expires[condition] < now: # 没过期就不发
+            and self.alert_email_expires[condition] > now: # 没过期就不发
             log.info(f"在{interval}秒内忽略同条件[{condition}]的告警邮件")
             return
         self.alert_email_expires[condition] = now + interval # 更新过期时间
@@ -247,13 +260,10 @@ class MonitorBoot(YamlBoot):
         # 发邮件
         msg = get_var('alert_msg')
         if ':' in msg:
-            title = substr_before(msg, ':')
+            title = substr_before(msg, ': ')
         else:
             title = msg
-        self.send_email({
-            'title': title,
-            'msg': msg,
-        })
+        self.do_send_email(title, msg)
 
     # -------------------------------- 监控进程 -----------------------------------
     # 监控的进程id
@@ -262,12 +272,6 @@ class MonitorBoot(YamlBoot):
         if self._pid is None:
             raise Exception("无pid")
         return self._pid
-
-    # 获得进程，不能定义为属性，否则于 YamlBoot.proc 动作冲突
-    def proc(self) -> ProcInfo:
-        if self._proc == None or self._proc.pid != self.pid:
-            self._proc = ProcInfo(self.pid)
-        return self._proc
 
     def monitor_pid(self, options):
         '''
@@ -309,7 +313,9 @@ class MonitorBoot(YamlBoot):
         if "\n" in pid:
             raise Exception(f"关键字[{grep}]匹配了多个进程: " + pid.replace('\n', ','))
         log.info(f"关键字[{grep}]匹配进程: {pid}")
+        # 记录进程id+进程名
         self._pid = pid
+        self._pname = ProcInfo(pid).name
 
     # -------------------------------- 监控jvm(进程+gc日志+线程日志)的动作 -----------------------------------
     def monitor_gc_log(self, steps, file):
@@ -359,8 +365,10 @@ class MonitorBoot(YamlBoot):
         :param filename_pref: 文件名前缀
         :return:
         '''
+        # 如果有告警就用告警条件作为文件名前缀
+        filename_pref = self.fix_alert_filename_pref(filename_pref, "JvmHeap")
         try:
-            now = ts.now2str().replace(' ', '_')
+            now = ts.now2str("%Y%m%d%H%M%S")
             file = f'{filename_pref}-{now}.hprof'
             cmd = f'jmap -dump:live,format=b,file={file} {self.pid}'
             await run_command_async(cmd)
@@ -375,14 +383,27 @@ class MonitorBoot(YamlBoot):
         :param filename_pref: 文件名前缀
         :return:
         '''
+        # 如果有告警就用告警条件作为文件名前缀
+        filename_pref = self.fix_alert_filename_pref(filename_pref, "JvmThread")
         try:
-            now = ts.now2str().replace(' ', '-')
+            now = ts.now2str("%Y%m%d%H%M%S")
             file = f'{filename_pref}-{now}.stack'
             cmd = f'jstack -l {self.pid} > {file}'
             await run_command_async(cmd)
             log.info(f"导出线程栈文件: {file}")
         except Exception as ex:
             log.error("MonitorBoot.dump_jvm_thread()异常: " + str(ex), exc_info=ex)
+
+    # 如果有告警就用告警条件作为文件名前缀
+    def fix_alert_filename_pref(self, filename_pref, default):
+        if filename_pref is None:
+            # 如果有告警就用告警条件作为文件名前缀
+            condition = get_var('alert_condition')
+            if condition is not None:
+                condition = condition.replace(' ', '')
+                filename_pref = f"{default}OnAlert[{condition}]"
+
+        return filename_pref or default
 
     # 将系统信息导出到csv
     @pool.run_in_pool
@@ -392,13 +413,16 @@ class MonitorBoot(YamlBoot):
         try:
             now = ts.now2str()
             today, time = now.split(' ')
+            # 建文件
             file = f'{filename_pref}-{today}.csv'
             if not os.path.exists(file):
-                cols = ['date', 'time', 'cpu%/s', 'mem_used(MB)', 'disk_read(MB/s)', 'disk_write(MB/s)', 'net_sent(MB/s)', 'net_recv(MB/s)']
+                cols = ['date', 'time', 'cpu%/s', 'mem%/s', 'mem_used(MB)', 'disk_read(MB/s)', 'disk_write(MB/s)', 'net_sent(MB/s)', 'net_recv(MB/s)']
                 self.append_csv_row(file, cols)
 
+            # 导出一行系统信息
             sys = await SysInfo().presleep_all_fields()
-            row = [today, time, sys.cpu_percent, sys.mem_used, sys.disk_read, sys.disk_write, sys.net_sent, sys.net_recv]
+            row = [today, time, sys.cpu_percent, sys.mem_percent, sys.mem_used, sys.disk_read, sys.disk_write, sys.net_sent, sys.net_recv]
+            # 转可读的文件大小
             for i in range(3, len(row)):
                 row[i] = bytes2file_size(row[i], 'M', False)
             self.append_csv_row(file, row)
@@ -413,22 +437,33 @@ class MonitorBoot(YamlBoot):
         try:
             now = ts.now2str()
             today, time = now.split(' ')
-            proc = self.proc()
-            file = f'{filename_pref}-{self.pid}-{today}.csv'
+            # 建文件
+            file = f'{filename_pref}-{self._pname}[{self.pid}]-{today}.csv'
             if not os.path.exists(file):
                 cols = ['date', 'time', 'cpu%/s', 'mem_used(MB)', 'mem%', 'status']
                 self.append_csv_row(file, cols)
 
-            await proc.presleep_all_fields()
+            # 导出一行进程信息
+            proc = await ProcInfo(self.pid).presleep_all_fields()
             row = [today, time, proc.cpu_percent, bytes2file_size(proc.mem_used, 'M', False), proc.mem_percent, proc.status]
             self.append_csv_row(file, row)
         except Exception as ex:
             log.error("MonitorBoot.dump_proc()异常: " + str(ex), exc_info=ex)
 
-    def append_csv_row(self, file, line):
+    def append_csv_row(self, file, vals):
+        # 修正小数
+        self.fix_float(vals)
+        # 文件加一行
         with open(file, 'a+', encoding='utf-8', newline='') as file_obj:
             writer = csv.writer(file_obj)
-            writer.writerow(line)
+            writer.writerow(vals)
+
+    # 修正小数
+    def fix_float(self, vals):
+        for i in range(0, len(vals)):
+            v = vals[i]
+            if isinstance(v, float):
+                vals[i] = '%.4f' % v
 
 # cli入口
 def main():

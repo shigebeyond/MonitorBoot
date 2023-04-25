@@ -6,13 +6,18 @@ from pyutilb.lazy import lazyproperty
 
 # 为了预备指标，需要提前睡1s
 class PresleepMixin(object):
+    sleep_sec = 1
+
     # 预备所有指标
     async def presleep_all_fields(self):
+        self.last_dio = None  # 记录上一秒磁盘io统计(读写字节数)，以便通过下一秒的值的对比来计算读写速率
+        self.last_nio = None  # 记录上一秒网络i
+
         # 检查是否要预备睡1s
         for field in self.sleep_fields:
             self.presleep_field(field)
         # 睡1s
-        await asyncio.sleep(1)
+        await asyncio.sleep(PresleepMixin.sleep_sec)
         return self
 
     # 在执行步骤前，提前预备指标
@@ -25,7 +30,7 @@ class PresleepMixin(object):
                     need_sleep = self.presleep_field(expr) or need_sleep
         # 睡1s
         if need_sleep:
-            await asyncio.sleep(1)
+            await asyncio.sleep(PresleepMixin.sleep_sec)
         return self
 
 # 系统信息，如cpu/内存/磁盘等
@@ -118,8 +123,18 @@ class SysInfo(PresleepMixin):
         disk_info = psutil.disk_usage("/")  # 根目录磁盘信息
         return float(disk_info.used / disk_info.total * 100)  # 根目录使用情况
 
+async def test():
+    while True:
+        sys = await SysInfo().presleep_all_fields()
+        print("cpu_percent=", sys.cpu_percent)
+        # print("mem_percent=", sys.mem_percent)
+        # print("mem_used=", sys.mem_used)
+        # print("disk_read=", sys.disk_read)
+        # print("disk_write=", sys.disk_write)
+        # print("net_sent=", sys.net_sent)
 
 if __name__ == '__main__':
-    print("psutil.psutil.disk_usage(): " + str(psutil.disk_usage("/")))
+    # print("psutil.psutil.disk_usage(): " + str(psutil.disk_usage("/")))
     print("psutil.cpu_percent(): " + str(psutil.cpu_percent(None, percpu=True)))
-    print("psutil.disk_io_counters(): " + str(psutil.disk_io_counters(perdisk=True)))
+    # print("psutil.disk_io_counters(): " + str(psutil.disk_io_counters(perdisk=True)))
+    asyncio.run(test())

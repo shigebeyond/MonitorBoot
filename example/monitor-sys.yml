@@ -1,20 +1,29 @@
+- debug:
+- config_email:
+      host: smtp.qq.com
+      password: $emailpass
+      from_name: MonitorBoot
+      from_email: 3076679995@qq.com
+      to_name: shigebeyond
+      to_email: 772910474@qq.com
+
 # 定时导出系统信息
-- schedule(5):
+- schedule(10):
     - dump_sys:
 
 # 定时导出进程信息
-- grep_pid: java | visualvm
-- schedule(5):
+- grep_pid: bin/java | visualvm
+- schedule(10):
     - dump_proc:
 
 # 定时做系统告警
 - schedule(10):
     - when_alert: # 发生告警时要执行以下步骤
-        - dump_jvm_heap: 'dump告警内存' # dump堆快照
+        - dump_jvm_heap: # dump堆快照
         - send_alert_email: # 发告警邮件
     - alert: # 告警
         # 告警条件
-        - mem_free <= 1024M # 剩余内存 <= 1024M
+        - sys.mem_free <= 1024M # 剩余内存 <= 1024M
 - schedule(10):
     - when_alert: # 发生告警时要执行以下步骤
         - dump_jvm_thread: # dump线程快照

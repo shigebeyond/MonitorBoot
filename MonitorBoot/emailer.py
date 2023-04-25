@@ -5,10 +5,10 @@ from email.mime.text import MIMEText
 
 # 配置
 config = {
+    'host': '',
+    'password': '',
     'from_name': '',
     'from_email': '',
-    'password': '',
-    'host': '',
     # 'to_email': '',
     # 'to_name': '',
 }
@@ -29,8 +29,8 @@ def send_email(title, msg, to_email = None, to_name = None):
 
     message = MIMEText(msg, 'plain', 'utf-8')  # Chinese required 'utf-8'
     message['Subject'] = Header(title, 'utf-8')
-    message['From'] = Header(config['from_name'])
-    message['To'] = Header(to_name, 'utf-8')
+    message['From'] = f"{config['from_name']} <{config['from_email']}>"
+    message['To'] = to_email
 
     do_send_email(message, to_email)
 

@@ -1,0 +1,32 @@
+# 开始编辑excel
+- start_edit: ../../data/系统统计图.xlsx
+# 切换sheet
+- switch_sheet: 系统
+# 读csv数据，放到变量syss
+- read_csv:
+    syss: ../../data/Sys-2023-04-25.csv
+# 插入plot绘图
+- insert_plot:
+    A1:
+      df: syss
+      kind: line
+      x: time
+      y: cpu%/s # y轴列名,支持多个,用逗号分割,可省(即为所有列)
+      subplots: true # 每个列各自绘制子图
+    A25:
+      df: syss
+      kind: line
+      x: time
+      y: mem%/s
+    F1:
+      df: syss
+      kind: line
+      x: time
+      y: disk_read(MB/s),disk_write(MB/s)
+    F25:
+      df: syss
+      kind: line
+      x: time
+      y: net_sent(MB/s),net_recv(MB/s)
+# 结束编辑excel（保存）
+- end_edit:
