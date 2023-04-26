@@ -65,6 +65,8 @@ class ProcInfo(PresleepMixin):
     # 已用内存
     @property
     def mem_used(self):
+        # pss： 当前进程与其他进程共享的内存
+        # uss： 当前进程独有的内存（不包共享内存）
         return self.proc.memory_full_info().uss
 
     # 内存使用率

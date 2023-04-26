@@ -373,6 +373,7 @@ class MonitorBoot(YamlBoot):
             cmd = f'jmap -dump:live,format=b,file={file} {self.pid}'
             await run_command_async(cmd)
             log.info(f"导出堆快照文件: {file}")
+            return file
         except Exception as ex:
             log.error("MonitorBoot.dump_jvm_heap()异常: " + str(ex), exc_info=ex)
 
@@ -391,6 +392,7 @@ class MonitorBoot(YamlBoot):
             cmd = f'jstack -l {self.pid} > {file}'
             await run_command_async(cmd)
             log.info(f"导出线程栈文件: {file}")
+            return file
         except Exception as ex:
             log.error("MonitorBoot.dump_jvm_thread()异常: " + str(ex), exc_info=ex)
 
@@ -426,6 +428,7 @@ class MonitorBoot(YamlBoot):
             for i in range(3, len(row)):
                 row[i] = bytes2file_size(row[i], 'M', False)
             self.append_csv_row(file, row)
+            return file
         except Exception as ex:
             log.error("MonitorBoot.dump_sys()异常: " + str(ex), exc_info=ex)
 

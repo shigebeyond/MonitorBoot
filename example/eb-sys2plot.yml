@@ -1,3 +1,4 @@
+# ExcelBoot脚本： 根据系统信息的Sys-???.csv，绘制曲线图
 # 开始编辑excel
 - start_edit: ../../data/系统统计图.xlsx
 # 切换sheet
