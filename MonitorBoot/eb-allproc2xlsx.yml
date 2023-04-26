@@ -1,0 +1,62 @@
+# 开始编辑excel
+- start_edit: $file
+- switch_sheet: stat_list
+- export_df: stat_list_df
+- cells(D):
+    style: Hyperlink
+- cells(1): # 第一行蓝色
+    fill: lightskyblue
+- cols(A:D):
+    width: 20
+# 磁盘io统计页
+- once:
+    - break_if: disk_io_df is None
+    - switch_sheet: disk_io_stat
+    - export_df: disk_io_df
+    - cells(1): # 第一行蓝色
+          fill: lightskyblue
+    - cells(P):
+          fill: red
+# 进程cpu统计页
+- once:
+    - break_if: process_cpu_df is None
+    - switch_sheet: process_cpu_stat
+    - export_df: process_cpu_df
+    - cells(1): # 第一行蓝色
+          fill: lightskyblue
+    - cells(G):
+          fill: red
+    - cols(I):
+        width: 30
+# 进程内存统计页
+- once:
+    - break_if: process_mem_df is None
+    - switch_sheet: process_mem_stat
+    - export_df: process_mem_df
+    - cells(1): # 第一行蓝色
+          fill: lightskyblue
+    - cells(G):
+          fill: red
+    - cols(H):
+        width: 30
+# 进程io统计页
+- once:
+    - break_if: process_io_df is None
+    - switch_sheet: process_io_stat
+    - export_df: process_io_df
+    - cells(1): # 第一行蓝色
+        fill: lightskyblue
+    - cols(G):
+        width: 30
+# 遍历top进程插入线程sheet
+- for(pid2threads):
+      - switch_sheet: threads_of_pid_${for_v.pid}
+      - set_vars(false):
+          threads: ${for_v.threads}
+      - export_df: threads
+      - cells(1): # 第一行蓝色
+          fill: lightskyblue
+      - cols(J):
+          width: 30
+# 结束编辑excel
+- end_edit:

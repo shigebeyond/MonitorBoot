@@ -14,6 +14,7 @@ from pyutilb.log import log
 from MonitorBoot import emailer
 from MonitorBoot.gc_log_parser import GcLogParser
 from MonitorBoot.procinfo import ProcInfo
+from MonitorBoot.procstat import dump_all_proc_stat
 from MonitorBoot.sysinfo import SysInfo
 
 # 协程线程池
@@ -35,11 +36,12 @@ class MonitorBoot(YamlBoot):
             'send_alert_email': self.send_alert_email,
             'monitor_pid': self.monitor_pid,
             'grep_pid': self.grep_pid,
+            'monitor_gc_log': self.monitor_gc_log,
             'dump_jvm_heap': self.dump_jvm_heap,
             'dump_jvm_thread': self.dump_jvm_thread,
-            'monitor_gc_log': self.monitor_gc_log,
-            'dump_sys': self.dump_sys,
-            'dump_proc': self.dump_proc,
+            'dump_sys_csv': self.dump_sys_csv,
+            'dump_1proc_csv': self.dump_1proc_csv,
+            'dump_all_proc_xlsx': self.dump_all_proc_xlsx,
         }
         self.add_actions(actions)
 
@@ -60,7 +62,7 @@ class MonitorBoot(YamlBoot):
 
         # 进程信息
         self._pid = None
-        self._pname = None
+        self._proc = None
 
         # ----- 告警处理 -----
         # 告警字段
@@ -273,6 +275,19 @@ class MonitorBoot(YamlBoot):
             raise Exception("无pid")
         return self._pid
 
+    # 检查是否监控java进程
+    def check_moniter_java(self, action):
+        if self._pid is None:
+            raise Exception("无pid")
+        ret = self._proc.is_java
+        # 只打错误日志不报错
+        if not ret:
+            pname = f"{self._proc.name}[{self.pid}]"
+            # raise Exception(f"非java进程: {pname}")
+            log.error(f"非java进程: {pname}, 不能执行{action}")
+        return ret
+
+
     def monitor_pid(self, options):
         '''
         监控进程，如果进程不存在，则抛异常
@@ -313,9 +328,9 @@ class MonitorBoot(YamlBoot):
         if "\n" in pid:
             raise Exception(f"关键字[{grep}]匹配了多个进程: " + pid.replace('\n', ','))
         log.info(f"关键字[{grep}]匹配进程: {pid}")
-        # 记录进程id+进程名
+        # 记录进程id+进程
         self._pid = pid
-        self._pname = ProcInfo(pid).name
+        self._proc = ProcInfo(pid)
 
     # -------------------------------- 监控jvm(进程+gc日志+线程日志)的动作 -----------------------------------
     def monitor_gc_log(self, steps, file):
@@ -361,10 +376,11 @@ class MonitorBoot(YamlBoot):
     @pool.run_in_pool
     async def dump_jvm_heap(self, filename_pref):
         '''
-        导出jvm堆快照
+        导出监控的进程的jvm堆快照
         :param filename_pref: 文件名前缀
         :return:
         '''
+        self.check_moniter_java('导出jvm堆快照')
         # 如果有告警就用告警条件作为文件名前缀
         filename_pref = self.fix_alert_filename_pref(filename_pref, "JvmHeap")
         try:
@@ -372,7 +388,7 @@ class MonitorBoot(YamlBoot):
             file = f'{filename_pref}-{now}.hprof'
             cmd = f'jmap -dump:live,format=b,file={file} {self.pid}'
             await run_command_async(cmd)
-            log.info(f"导出堆快照文件: {file}")
+            log.info(f"导出jvm堆快照: {file}")
             return file
         except Exception as ex:
             log.error("MonitorBoot.dump_jvm_heap()异常: " + str(ex), exc_info=ex)
@@ -380,18 +396,19 @@ class MonitorBoot(YamlBoot):
     @pool.run_in_pool
     async def dump_jvm_thread(self, filename_pref):
         '''
-        导出jvm线程栈
+        导出监控的进程的jvm线程栈
         :param filename_pref: 文件名前缀
         :return:
         '''
+        self.check_moniter_java('导出jvm线程栈')
         # 如果有告警就用告警条件作为文件名前缀
         filename_pref = self.fix_alert_filename_pref(filename_pref, "JvmThread")
         try:
             now = ts.now2str("%Y%m%d%H%M%S")
-            file = f'{filename_pref}-{now}.stack'
+            file = f'{filename_pref}-{now}.tdump'
             cmd = f'jstack -l {self.pid} > {file}'
             await run_command_async(cmd)
-            log.info(f"导出线程栈文件: {file}")
+            log.info(f"导出jvm线程栈: {file}")
             return file
         except Exception as ex:
             log.error("MonitorBoot.dump_jvm_thread()异常: " + str(ex), exc_info=ex)
@@ -409,7 +426,7 @@ class MonitorBoot(YamlBoot):
 
     # 将系统信息导出到csv
     @pool.run_in_pool
-    async def dump_sys(self, filename_pref):
+    async def dump_sys_csv(self, filename_pref):
         if filename_pref is None:
             filename_pref = 'Sys'
         try:
@@ -430,18 +447,18 @@ class MonitorBoot(YamlBoot):
             self.append_csv_row(file, row)
             return file
         except Exception as ex:
-            log.error("MonitorBoot.dump_sys()异常: " + str(ex), exc_info=ex)
+            log.error("MonitorBoot.dump_sys_csv()异常: " + str(ex), exc_info=ex)
 
-    # 将进程信息导出到csv
+    # 将监控的进程信息导出到csv
     @pool.run_in_pool
-    async def dump_proc(self, filename_pref):
+    async def dump_1proc_csv(self, filename_pref):
         if filename_pref is None:
             filename_pref = 'Proc'
         try:
             now = ts.now2str()
             today, time = now.split(' ')
             # 建文件
-            file = f'{filename_pref}-{self._pname}[{self.pid}]-{today}.csv'
+            file = f'{filename_pref}-{self._proc.name}[{self.pid}]-{today}.csv'
             if not os.path.exists(file):
                 cols = ['date', 'time', 'cpu%/s', 'mem_used(MB)', 'mem%', 'status']
                 self.append_csv_row(file, cols)
@@ -451,7 +468,7 @@ class MonitorBoot(YamlBoot):
             row = [today, time, proc.cpu_percent, bytes2file_size(proc.mem_used, 'M', False), proc.mem_percent, proc.status]
             self.append_csv_row(file, row)
         except Exception as ex:
-            log.error("MonitorBoot.dump_proc()异常: " + str(ex), exc_info=ex)
+            log.error("MonitorBoot.dump_1proc_csv()异常: " + str(ex), exc_info=ex)
 
     def append_csv_row(self, file, vals):
         # 修正小数
@@ -467,6 +484,17 @@ class MonitorBoot(YamlBoot):
             v = vals[i]
             if isinstance(v, float):
                 vals[i] = '%.4f' % v
+
+    # 将所有进程信息导出到xlsx
+    @pool.run_in_pool
+    async def dump_all_proc_xlsx(self, filename_pref):
+        proc = {
+            'PID': self._pid,
+            'Command': self._proc.name,
+        }
+        file = await dump_all_proc_stat(filename_pref, proc)
+        log.info(f"导出所有进程信息: {file}")
+        return file
 
 # cli入口
 def main():

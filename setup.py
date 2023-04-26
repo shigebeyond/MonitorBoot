@@ -30,7 +30,9 @@ setup(
     description=meta['description'],
     long_description=long_description,
     long_description_content_type="text/markdown",
-    packages=find_packages(),
+    packages=['MonitorBoot'],
+    package_dir={'MonitorBoot': 'MonitorBoot'},
+    package_data={"MonitorBoot": ["eb-allproc2xlsx.yml"]},  # 默认是不带py之外的文件，因此要主动声明带上
     include_package_data=True,
     zip_safe=False,
     python_requires=">=3.6",
