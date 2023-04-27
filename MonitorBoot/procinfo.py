@@ -44,8 +44,8 @@ class ProcInfo(PresleepMixin):
     # 是否java进程
     @property
     def is_java(self):
-        return self.proc.name == "java" \
-               or self.proc.exe.endswith("java")
+        return self.proc.name() == "java" \
+               or self.proc.exe().endswith("java")
 
     # 进程名
     @property
