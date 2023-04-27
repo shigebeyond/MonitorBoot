@@ -83,8 +83,8 @@ class MonitorBoot(YamlBoot):
             '>=': lambda val, param: float(val) >= float(param),
             '<=': lambda val, param: float(val) <= float(param),
         }
-        # 记录告警邮件的过期时间, key是告警条件(表示类型), value是过期时间，没过期就不发，用来限制同条件的告警邮件发送频率
-        self.alert_email_expires = {}
+        # 记录告警条件的过期时间, key是告警条件(表示类型), value是过期时间，没过期就不处理告警，用来限制同条件的告警的处理频率，如限制导出进程xlsx或发邮件
+        self.alert_condition_expires = {}
 
     # 执行完的后置处理
     def on_end(self):
@@ -163,31 +163,74 @@ class MonitorBoot(YamlBoot):
     def when_alert(self, steps):
         set_var('when_alert', steps)
 
-    # 告警处理
-    def alert(self, conditions):
+    def alert(self, conditions, expire_sec = 600):
+        '''
+        告警处理
+        :param conditions: 多个告警条件
+        :param expire_sec: 同条件的告警的过期秒数(默认600秒)，没过期就不处理同条件告警，用于限制同条件的告警的处理频率
+        :return:
+        '''
         if not isinstance(conditions, (str, list)):
             raise Exception("告警参数必须str或list类型")
         if isinstance(conditions, str):
             conditions = [conditions]
 
         try:
-            # 1 逐个表达式来执行告警
+            # 1 逐个表达式来执行告警，如果报警发生则报异常
             for condition in conditions:
+                condition = condition.lstrip()
                 self.do_alert(condition)
         except Exception as ex:
-            msg = str(ex)
-            log.error(msg)
-            set_var('alert_msg', msg)
-            set_var('alert_condition', condition)
-            # 2 当发生告警异常要调用when_alert注册的动作
-            steps = get_var('when_alert')
-            if steps:
-                log.info("告警发生, 触发when_alert注册的动作")
-                self.run_steps(steps)
-            # 清空alert相关变量
-            set_var('when_alert', None)
-            set_var('alert_msg', None)
-            set_var('alert_condition', None)
+            # 2 处理告警异常：异常=告警发生
+            self.handle_alert_exception(condition, ex, int(expire_sec))
+
+    def handle_alert_exception(self, condition, ex, expire_sec):
+        '''
+        处理告警异常：异常=告警发生
+        :param condition: 告警条件
+        :param ex: 告警异常
+        :param expire_sec: 同条件的告警的过期秒数(默认600秒)，没过期就不处理同条件告警，用于限制同条件的告警的处理频率
+        :return:
+        '''
+        msg = str(ex)
+        log.error(msg)
+
+        # 检查该条件的告警是否没过期, 是的话就不处理同条件(同类)异常
+        if not self.check_alert_expired(condition, expire_sec):
+            if condition in self.alert_condition_expires:
+                print("过期时间为: "+ ts.timestamp2str(self.alert_condition_expires[condition]))
+            log.info(f"在{expire_sec}秒内忽略同条件[{condition}]的告警")
+            return
+
+        # 处理告警异常
+        set_var('alert_msg', msg)
+        set_var('alert_condition', condition)
+        # 当发生告警异常要调用when_alert注册的动作
+        steps = get_var('when_alert')
+        if steps:
+            log.info("告警发生, 触发when_alert注册的动作")
+            self.run_steps(steps)
+        # 清空alert相关变量
+        set_var('when_alert', None)
+        set_var('alert_msg', None)
+        set_var('alert_condition', None)
+
+    def check_alert_expired(self, condition, expire_sec):
+        '''
+        检查该条件的告警是否过期
+        :param condition: 告警条件
+        :param expire_sec: 同条件的告警的过期秒数(默认600秒)，没过期就不处理同条件告警，用于限制同条件的告警的处理频率
+        :return:
+        '''
+        now = time.time()
+        # 没过期时间(之前没发生过同条件告警) or 过期了
+        ret = condition not in self.alert_condition_expires \
+                or self.alert_condition_expires[condition] < now  # 过期了
+
+        # 过期后，要更新过期时间
+        if ret:
+            self.alert_condition_expires[condition] = now + expire_sec
+        return ret
 
     def do_alert(self, condition):
         '''
@@ -240,25 +283,8 @@ class MonitorBoot(YamlBoot):
         op = self.ops[op]
         return op(val, param)
 
-    def send_alert_email(self, interval):
-        '''
-        发送告警邮件
-        :param interval: 间隔时间 = 同条件的告警邮件的过期时间(单位秒，默认600秒)，没过期就不发，用于限制同条件的告警邮件发送频率
-        '''
-        if not interval:
-            interval = 600
-        # 检查该条件的告警邮件是否没过期, 是的话就不发
-        condition = get_var('alert_condition')
-        if condition is None:
-            log.info("无告警发生，无需发告警邮件")
-            return
-        now = time.time()
-        if condition in self.alert_email_expires \
-            and self.alert_email_expires[condition] > now: # 没过期就不发
-            log.info(f"在{interval}秒内忽略同条件[{condition}]的告警邮件")
-            return
-        self.alert_email_expires[condition] = now + interval # 更新过期时间
-
+    # 发送告警邮件
+    def send_alert_email(self, _):
         # 发邮件
         msg = get_var('alert_msg')
         if ':' in msg:
@@ -279,14 +305,9 @@ class MonitorBoot(YamlBoot):
     def check_moniter_java(self, action):
         if self._pid is None:
             raise Exception("无pid")
-        ret = self._proc.is_java
-        # 只打错误日志不报错
-        if not ret:
+        if not self._proc.is_java:
             pname = f"{self._proc.name}[{self.pid}]"
-            # raise Exception(f"非java进程: {pname}")
-            log.error(f"非java进程: {pname}, 不能执行{action}")
-        return ret
-
+            raise Exception(f"非java进程: {pname}, 不能执行{action}")
 
     def monitor_pid(self, options):
         '''
@@ -380,10 +401,10 @@ class MonitorBoot(YamlBoot):
         :param filename_pref: 文件名前缀
         :return:
         '''
-        self.check_moniter_java('导出jvm堆快照')
-        # 如果有告警就用告警条件作为文件名前缀
-        filename_pref = self.fix_alert_filename_pref(filename_pref, "JvmHeap")
         try:
+            self.check_moniter_java('导出jvm堆快照')
+            # 如果有告警就用告警条件作为文件名前缀
+            filename_pref = self.fix_alert_filename_pref(filename_pref, "JvmHeap")
             now = ts.now2str("%Y%m%d%H%M%S")
             file = f'{filename_pref}-{now}.hprof'
             cmd = f'jmap -dump:live,format=b,file={file} {self.pid}'
@@ -400,10 +421,10 @@ class MonitorBoot(YamlBoot):
         :param filename_pref: 文件名前缀
         :return:
         '''
-        self.check_moniter_java('导出jvm线程栈')
-        # 如果有告警就用告警条件作为文件名前缀
-        filename_pref = self.fix_alert_filename_pref(filename_pref, "JvmThread")
         try:
+            self.check_moniter_java('导出jvm线程栈')
+            # 如果有告警就用告警条件作为文件名前缀
+            filename_pref = self.fix_alert_filename_pref(filename_pref, "JvmThread")
             now = ts.now2str("%Y%m%d%H%M%S")
             file = f'{filename_pref}-{now}.tdump'
             cmd = f'jstack -l {self.pid} > {file}'
@@ -427,9 +448,9 @@ class MonitorBoot(YamlBoot):
     # 将系统信息导出到csv
     @pool.run_in_pool
     async def dump_sys_csv(self, filename_pref):
-        if filename_pref is None:
-            filename_pref = 'Sys'
         try:
+            if filename_pref is None:
+                filename_pref = 'Sys'
             now = ts.now2str()
             today, time = now.split(' ')
             # 建文件
@@ -452,9 +473,9 @@ class MonitorBoot(YamlBoot):
     # 将监控的进程信息导出到csv
     @pool.run_in_pool
     async def dump_1proc_csv(self, filename_pref):
-        if filename_pref is None:
-            filename_pref = 'Proc'
         try:
+            if filename_pref is None:
+                filename_pref = 'Proc'
             now = ts.now2str()
             today, time = now.split(' ')
             # 建文件
@@ -488,13 +509,16 @@ class MonitorBoot(YamlBoot):
     # 将所有进程信息导出到xlsx
     @pool.run_in_pool
     async def dump_all_proc_xlsx(self, filename_pref):
-        proc = {
-            'PID': self._pid,
-            'Command': self._proc.name,
-        }
-        file = await dump_all_proc_stat(filename_pref, proc)
-        log.info(f"导出所有进程信息: {file}")
-        return file
+        try:
+            proc = {
+                'PID': self._pid,
+                'Command': self._proc.name,
+            }
+            file = await dump_all_proc_stat(filename_pref, proc)
+            log.info(f"导出所有进程信息: {file}")
+            return file
+        except Exception as ex:
+            log.error("MonitorBoot.dump_all_proc_xlsx()异常: " + str(ex), exc_info=ex)
 
 # cli入口
 def main():
