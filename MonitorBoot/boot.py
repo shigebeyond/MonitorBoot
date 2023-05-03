@@ -1,9 +1,14 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
+import asyncio
 import os
 import time
+import uuid
+from asyncio import coroutines
+
 import psutil
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from pyutilb.asyncio_threadpool import get_running_loop
 from pyutilb.strs import substr_after, substr_before
 from pyutilb.tail import Tail
 from pyutilb.util import *
@@ -37,6 +42,7 @@ class MonitorBoot(YamlBoot):
             'monitor_pid': self.monitor_pid,
             'grep_pid': self.grep_pid,
             'monitor_gc_log': self.monitor_gc_log,
+            # 异步动作
             'dump_jvm_heap': self.dump_jvm_heap,
             'dump_jvm_thread': self.dump_jvm_thread,
             'dump_sys_csv': self.dump_sys_csv,
@@ -62,6 +68,7 @@ class MonitorBoot(YamlBoot):
 
         # 进程信息
         self._pid = None
+        self._pid_grep = None
         self._proc = None
 
         # ----- 告警处理 -----
@@ -92,6 +99,18 @@ class MonitorBoot(YamlBoot):
         asyncio.get_event_loop().run_forever()
 
     # -------------------------------- 普通动作 -----------------------------------
+    # 睡眠
+    async def sleep(self, seconds):
+        if get_running_loop() is None:
+            time.sleep(int(seconds))
+        else:
+            await asyncio.sleep(int(seconds))
+
+    # 执行命令
+    async def exec(self, cmd):
+        # wait_output = False 用于在 when_not_run 中调用 exec() 重启被监控的进程，但又不能因为启动进程的命令执行而阻塞当前线程
+        await run_command_async(cmd, wait_output = False)
+
     # 配置邮件服务器
     # :param config 包含host, password, from_name, from_email, to_name, to_email
     def config_email(self, config):
@@ -110,17 +129,46 @@ class MonitorBoot(YamlBoot):
         emailer.send_email(title, msg)
 
     # 异步执行步骤：主要是优化 psutil.cpu_percent(1) 的阻塞带来的性能问题，要扔到eventloop所在的线程中运行
-    async def run_steps_async(self, steps, vars = {}):
+    async def run_steps_async(self, steps, vars = {}, serial = True):
         # 提前预备好SysInfo
         sys = await SysInfo().presleep_fields_in_steps(steps)
-        vars['sys'] = sys
+        set_var('sys', sys)
 
         # 应用变量，因为变量是在ThreadLocal中，只能在同步代码中应用
         with UseVars(vars):
             # 真正执行步骤
-            # name = threading.current_thread()  # MainThread
-            # print(f"thread[{name}]执行步骤")
-            self.run_steps(steps)
+            if serial: # 串行
+                await self.run_steps_serial(steps)
+            else: # 并行
+                await self.run_steps_parallel(steps)
+
+    # 串行执行多个步骤
+    async def run_steps_serial(self, steps):
+        # 逐个步骤调用多个动作
+        for step in steps:
+            self.stat.incr_step()  # 统计
+            for action, param in step.items():
+                self.stat.incr_action()  # 统计
+                ret = self.run_action(action, param)
+                # 如果返回值是协程, 则要await
+                if coroutines.iscoroutine(ret):
+                    await ret
+
+    #  并行执行多个步骤
+    async def run_steps_parallel(self, steps):
+        # 收集异步结果
+        async_rets  = []
+        # 逐个步骤调用多个动作
+        for step in steps:
+            self.stat.incr_step()  # 统计
+            for action, param in step.items():
+                self.stat.incr_action()  # 统计
+                ret = self.run_action(action, param)
+                # 如果返回值是协程, 则要await
+                if coroutines.iscoroutine(ret):
+                    async_rets.append(ret)
+        # 等待所有结果
+        await asyncio.gather(async_rets)
 
     def schedule(self, steps, wait_seconds):
         '''
@@ -141,9 +189,9 @@ class MonitorBoot(YamlBoot):
         '''
         async def read_line(line):
             # 将行塞到变量中，以便子步骤能读取
-            vars = {'tail_line': line}
+            set_var('tail_line', line)
             # 执行子步骤
-            await self.run_steps_async(steps, vars)
+            await self.run_steps_async(steps)
         self.do_tail(file, read_line)
 
     def do_tail(self, file, callback):
@@ -163,7 +211,7 @@ class MonitorBoot(YamlBoot):
     def when_alert(self, steps):
         set_var('when_alert', steps)
 
-    def alert(self, conditions, expire_sec = 600):
+    async def alert(self, conditions, expire_sec = 600):
         '''
         告警处理
         :param conditions: 多个告警条件
@@ -182,9 +230,9 @@ class MonitorBoot(YamlBoot):
                 self.do_alert(condition)
         except Exception as ex:
             # 2 处理告警异常：异常=告警发生
-            self.handle_alert_exception(condition, ex, int(expire_sec))
+            await self.handle_alert_exception(condition, ex, int(expire_sec))
 
-    def handle_alert_exception(self, condition, ex, expire_sec):
+    async def handle_alert_exception(self, condition, ex, expire_sec):
         '''
         处理告警异常：异常=告警发生
         :param condition: 告警条件
@@ -209,7 +257,8 @@ class MonitorBoot(YamlBoot):
         steps = get_var('when_alert')
         if steps:
             log.info("告警发生, 触发when_alert注册的动作")
-            self.run_steps(steps)
+            # await self.run_steps_async(steps)
+            pool.exec(self.run_steps_async, steps) # 耗时操作扔到线程池执行
         # 清空alert相关变量
         set_var('when_alert', None)
         set_var('alert_msg', None)
@@ -298,15 +347,24 @@ class MonitorBoot(YamlBoot):
     @property
     def pid(self):
         if self._pid is None:
-            raise Exception("无pid")
+            self.grep_pid(self._pid_grep) # 先尝试grep pid
+            if self._pid is None:
+                raise Exception("无pid")
         return self._pid
+
+    # 监控的进程名
+    @property
+    def pname(self):
+        if self._proc is None:
+            self.grep_pid(self._pid_grep) # 先尝试grep pid
+        return self._proc.name
 
     # 检查是否监控java进程
     def check_moniter_java(self, action):
         if self._pid is None:
             raise Exception("无pid")
         if not self._proc.is_java:
-            pname = f"{self._proc.name}[{self.pid}]"
+            pname = f"{self.pname}[{self.pid}]"
             raise Exception(f"非java进程: {pname}, 不能执行{action}")
 
     def monitor_pid(self, options):
@@ -323,19 +381,15 @@ class MonitorBoot(YamlBoot):
             self.grep_pid(options['grep'])
         except Exception as ex:
             # 2 当进程没运行时执行的步骤
-            if 'when_no_run' in options and options['when_no_run'] is not None:
+            steps = options.get('when_no_run')
+            if steps is not None:
                 log.info(f"进程[{options['grep']}]没运行, 触发when_no_run注册的动作")
-                self.run_steps(options['when_no_run'])
+                # await self.run_steps_async(steps) # 不要await，否则monitor_pid()要async，而执行yaml文件中的run_steps()是不支持调用async动作的
+                pool.exec(self.run_steps_async, steps) # 耗时操作扔到线程池执行
 
         # 3 使用递归+延迟来实现定时检查
-        interval = self.get_interval(options)
+        interval = options.get('interval', 10)
         self.loop.call_later(interval, self.monitor_pid, options)
-
-    # 从选项中获得时间间隔
-    def get_interval(self, options):
-        if 'interval' in options and options['interval'] is not None:
-            return int(options['interval'])
-        return 10
 
     def grep_pid(self, grep):
         '''
@@ -343,6 +397,9 @@ class MonitorBoot(YamlBoot):
         :param grep: 用ps aux搜索进程时要搜索的关键字，支持多个，用|分割
         :return:
         '''
+        if self._pid_grep is not None and self._pid_grep != grep:
+            raise Exception(f"框架只支持监控一个进程：已监控[{self._pid_grep}]进程")
+        self._pid_grep = grep
         pid = get_pid_by_grep(grep)
         if pid is None:
             raise Exception(f"不存在匹配[{grep}]的进程")
@@ -371,7 +428,7 @@ class MonitorBoot(YamlBoot):
             gc = self.gc_parser.parse_gc_line(line)
             if gc != None:
                 # 将gc信息塞到变量中，以便子步骤能读取
-                vars = {'gc': gc}
+                set_var('gc', gc)
                 # 执行子步骤
                 await self.run_steps_async(steps, vars)
         self.do_tail(file, read_line)
@@ -394,7 +451,6 @@ class MonitorBoot(YamlBoot):
         return gc
 
     # -------------------------------- dump -----------------------------------
-    @pool.run_in_pool
     async def dump_jvm_heap(self, filename_pref):
         '''
         导出监控的进程的jvm堆快照
@@ -407,14 +463,14 @@ class MonitorBoot(YamlBoot):
             filename_pref = self.fix_alert_filename_pref(filename_pref, "JvmHeap")
             now = ts.now2str("%Y%m%d%H%M%S")
             file = f'{filename_pref}-{now}.hprof'
-            cmd = f'jmap -dump:live,format=b,file={file} {self.pid}'
+            cmd = f"jmap -dump:live,format=b,file='{file}' {self.pid}"
             await run_command_async(cmd)
+            # os.rename(file1, file2)
             log.info(f"导出jvm堆快照: {file}")
             return file
         except Exception as ex:
             log.error("MonitorBoot.dump_jvm_heap()异常: " + str(ex), exc_info=ex)
 
-    @pool.run_in_pool
     async def dump_jvm_thread(self, filename_pref):
         '''
         导出监控的进程的jvm线程栈
@@ -427,7 +483,7 @@ class MonitorBoot(YamlBoot):
             filename_pref = self.fix_alert_filename_pref(filename_pref, "JvmThread")
             now = ts.now2str("%Y%m%d%H%M%S")
             file = f'{filename_pref}-{now}.tdump'
-            cmd = f'jstack -l {self.pid} > {file}'
+            cmd = f"jstack -l {self.pid} > '{file}'"
             await run_command_async(cmd)
             log.info(f"导出jvm线程栈: {file}")
             return file
@@ -446,7 +502,6 @@ class MonitorBoot(YamlBoot):
         return filename_pref or default
 
     # 将系统信息导出到csv
-    @pool.run_in_pool
     async def dump_sys_csv(self, filename_pref):
         try:
             if filename_pref is None:
@@ -471,7 +526,6 @@ class MonitorBoot(YamlBoot):
             log.error("MonitorBoot.dump_sys_csv()异常: " + str(ex), exc_info=ex)
 
     # 将监控的进程信息导出到csv
-    @pool.run_in_pool
     async def dump_1proc_csv(self, filename_pref):
         try:
             if filename_pref is None:
@@ -479,7 +533,7 @@ class MonitorBoot(YamlBoot):
             now = ts.now2str()
             today, time = now.split(' ')
             # 建文件
-            file = f'{filename_pref}-{self._proc.name}[{self.pid}]-{today}.csv'
+            file = f'{filename_pref}-{self.pname}[{self.pid}]-{today}.csv'
             if not os.path.exists(file):
                 cols = ['date', 'time', 'cpu%/s', 'mem_used(MB)', 'mem%', 'status']
                 self.append_csv_row(file, cols)
@@ -507,12 +561,11 @@ class MonitorBoot(YamlBoot):
                 vals[i] = '%.4f' % v
 
     # 将所有进程信息导出到xlsx
-    @pool.run_in_pool
     async def dump_all_proc_xlsx(self, filename_pref):
         try:
             proc = {
                 'PID': self._pid,
-                'Command': self._proc.name,
+                'Command': self.pname,
             }
             file = await dump_all_proc_stat(filename_pref, proc)
             log.info(f"导出所有进程信息: {file}")

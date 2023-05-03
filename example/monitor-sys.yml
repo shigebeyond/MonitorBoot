@@ -11,8 +11,13 @@
 - schedule(10):
     - dump_sys_csv:
 
+# 监控进程的pid
+- monitor_pid:
+    grep: java | visualvm | org.netbeans.Main
+    when_no_run: # 没运行时执行以下步骤
+      - exec: nohup jvisualvm &
+
 # 定时导出进程信息
-- grep_pid: bin/java | visualvm
 - schedule(10):
     - dump_1proc_csv: # dump当前监控的进程
 

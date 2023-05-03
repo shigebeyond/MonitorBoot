@@ -55,7 +55,7 @@ class ProcInfo(PresleepMixin):
             cl = self.proc.cmdline()
             for p in cl[1:]:
                 if not p.startswith('-') and ':' not in p: # 忽略选项，返回主类
-                    return p
+                    return 'java:' + p
         return ret
 
     # 进程状态
