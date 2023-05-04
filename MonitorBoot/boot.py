@@ -19,7 +19,7 @@ from pyutilb.log import log
 from MonitorBoot import emailer
 from MonitorBoot.gc_log_parser import GcLogParser
 from MonitorBoot.procinfo import ProcInfo
-from MonitorBoot.procstat import dump_all_proc_stat
+from MonitorBoot.procstat import all_proc_stat2xlsx
 from MonitorBoot.sysinfo import SysInfo
 
 # 协程线程池
@@ -45,9 +45,10 @@ class MonitorBoot(YamlBoot):
             # 异步动作
             'dump_jvm_heap': self.dump_jvm_heap,
             'dump_jvm_thread': self.dump_jvm_thread,
+            'dump_jvm_gcs_xlsx': self.dump_jvm_gcs_xlsx,
+            'dump_all_proc_xlsx': self.dump_all_proc_xlsx,
             'dump_sys_csv': self.dump_sys_csv,
             'dump_1proc_csv': self.dump_1proc_csv,
-            'dump_all_proc_xlsx': self.dump_all_proc_xlsx,
         }
         self.add_actions(actions)
 
@@ -128,11 +129,18 @@ class MonitorBoot(YamlBoot):
             return
         emailer.send_email(title, msg)
 
-    # 异步执行步骤：主要是优化 psutil.cpu_percent(1) 的阻塞带来的性能问题，要扔到eventloop所在的线程中运行
     async def run_steps_async(self, steps, vars = {}, serial = True):
+        '''
+        异步执行步骤
+            主要是优化 psutil.cpu_percent(1) 的阻塞 + when_alert 耗时操作 所带来的性能问题，要扔到eventloop所在的线程中运行
+            因为要扔到其他线程执行，导致不能直接使用调用线程的变量，因此需要通过 vars 参数来传递
+        :param steps: 要执行的步骤
+        :param vars: 传递调用线程中的变量
+        :param serial: 是否串行执行，否则并行执行(一般用于执行 when_alert 耗时操作)
+        :return:
+        '''
         # 提前预备好SysInfo
-        sys = await SysInfo().presleep_fields_in_steps(steps)
-        set_var('sys', sys)
+        vars['sys'] = await SysInfo().presleep_fields_in_steps(steps)
 
         # 应用变量，因为变量是在ThreadLocal中，只能在同步代码中应用
         with UseVars(vars):
@@ -189,9 +197,9 @@ class MonitorBoot(YamlBoot):
         '''
         async def read_line(line):
             # 将行塞到变量中，以便子步骤能读取
-            set_var('tail_line', line)
+            vars = {'tail_line': line}
             # 执行子步骤
-            await self.run_steps_async(steps)
+            await self.run_steps_async(steps, vars)
         self.do_tail(file, read_line)
 
     def do_tail(self, file, callback):
@@ -251,18 +259,17 @@ class MonitorBoot(YamlBoot):
             return
 
         # 处理告警异常
-        set_var('alert_msg', msg)
-        set_var('alert_condition', condition)
         # 当发生告警异常要调用when_alert注册的动作
         steps = get_var('when_alert')
+        set_var('when_alert', None)
         if steps:
             log.info("告警发生, 触发when_alert注册的动作")
-            # await self.run_steps_async(steps)
-            pool.exec(self.run_steps_async, steps) # 耗时操作扔到线程池执行
-        # 清空alert相关变量
-        set_var('when_alert', None)
-        set_var('alert_msg', None)
-        set_var('alert_condition', None)
+            vars = {
+                'alert_msg': msg,
+                'alert_condition': condition,
+            }
+            # await self.run_steps_async(steps, vars)
+            pool.exec(self.run_steps_async, steps, vars) # 耗时操作扔到线程池执行
 
     def check_alert_expired(self, condition, expire_sec):
         '''
@@ -292,7 +299,7 @@ class MonitorBoot(YamlBoot):
         # 获得col所在的对象
         if '.' not in col:
             col = 'sys.' + col
-        obj_name, col2 = col.split('.')
+        obj_name, col2 = col.split('.', 1)
         obj = self.get_op_object(obj_name)
         # 读col值
         val = getattr(obj, col2)
@@ -306,7 +313,7 @@ class MonitorBoot(YamlBoot):
         if 'sys' == obj_name:
             return get_var('sys')
         if 'proc' == obj_name:
-            return get_var('proc')
+            return self._proc
         if 'ygc' == obj_name:
             return self.check_current_gc(False)
         if 'fgc' == obj_name:
@@ -340,6 +347,7 @@ class MonitorBoot(YamlBoot):
             title = substr_before(msg, ': ')
         else:
             title = msg
+        msg = msg + "\n详细日志与导出文件在目录: " + os.getcwd()
         self.do_send_email(title, msg)
 
     # -------------------------------- 监控进程 -----------------------------------
@@ -349,7 +357,7 @@ class MonitorBoot(YamlBoot):
         if self._pid is None:
             self.grep_pid(self._pid_grep) # 先尝试grep pid
             if self._pid is None:
-                raise Exception("无pid")
+                raise Exception("没用使用动作 monitor_pid/grep_pid 来监控 pid")
         return self._pid
 
     # 监控的进程名
@@ -372,7 +380,7 @@ class MonitorBoot(YamlBoot):
         监控进程，如果进程不存在，则抛异常
         :param options 选项，包含
                     grep: 用ps aux搜索进程时要搜索的关键字
-                    interval: 定时检查的时间间隔，用于定时检查进程是否还存在，为null则不检查
+                    interval: 定时检查的时间间隔，用于定时检查进程是否还存在，默认10秒
                     when_no_run: 当进程没运行时执行的步骤
         :return:
         '''
@@ -386,6 +394,7 @@ class MonitorBoot(YamlBoot):
                 log.info(f"进程[{options['grep']}]没运行, 触发when_no_run注册的动作")
                 # await self.run_steps_async(steps) # 不要await，否则monitor_pid()要async，而执行yaml文件中的run_steps()是不支持调用async动作的
                 pool.exec(self.run_steps_async, steps) # 耗时操作扔到线程池执行
+                # pool.exec(self.run_steps_async, steps, get_vars(True))
 
         # 3 使用递归+延迟来实现定时检查
         interval = options.get('interval', 10)
@@ -394,7 +403,7 @@ class MonitorBoot(YamlBoot):
     def grep_pid(self, grep):
         '''
         监控进程，如果进程不存在，则抛异常
-        :param grep: 用ps aux搜索进程时要搜索的关键字，支持多个，用|分割
+        :param grep: 用 `ps aux | grep` 搜索进程时要搜索的关键字，支持多个，用|分割
         :return:
         '''
         if self._pid_grep is not None and self._pid_grep != grep:
@@ -428,7 +437,7 @@ class MonitorBoot(YamlBoot):
             gc = self.gc_parser.parse_gc_line(line)
             if gc != None:
                 # 将gc信息塞到变量中，以便子步骤能读取
-                set_var('gc', gc)
+                vars = {'gc': gc}
                 # 执行子步骤
                 await self.run_steps_async(steps, vars)
         self.do_tail(file, read_line)
@@ -489,6 +498,37 @@ class MonitorBoot(YamlBoot):
             return file
         except Exception as ex:
             log.error("MonitorBoot.dump_jvm_thread()异常: " + str(ex), exc_info=ex)
+
+    # 将jvm gc信息导出到xlsx
+    async def dump_jvm_gcs_xlsx(self, filename_pref):
+        try:
+            if self.gc_parser is None:
+                raise Exception("没用使用动作 monitor_gc_log 来监控与解析gc日志")
+
+            # 如果有告警就用告警条件作为文件名前缀
+            filename_pref = self.fix_alert_filename_pref(filename_pref, "JvmGC")
+            file = await self.gc_parser.gcs2xlsx(filename_pref)
+            log.info(f"导出jvm gc信息: {file}")
+            return file
+        except Exception as ex:
+            log.error("MonitorBoot.dump_jvm_gcs_xlsx()异常: " + str(ex), exc_info=ex)
+
+    # 将所有进程信息导出到xlsx
+    async def dump_all_proc_xlsx(self, filename_pref):
+        try:
+            proc = None
+            if self._pid is not None:
+                proc = {
+                    'PID': self._pid,
+                    'Command': self.pname,
+                }
+            # 如果有告警就用告警条件作为文件名前缀
+            filename_pref = self.fix_alert_filename_pref(filename_pref, "ProcStat")
+            file = await all_proc_stat2xlsx(filename_pref, proc)
+            log.info(f"导出所有进程信息: {file}")
+            return file
+        except Exception as ex:
+            log.error("MonitorBoot.dump_all_proc_xlsx()异常: " + str(ex), exc_info=ex)
 
     # 如果有告警就用告警条件作为文件名前缀
     def fix_alert_filename_pref(self, filename_pref, default):
@@ -559,19 +599,6 @@ class MonitorBoot(YamlBoot):
             v = vals[i]
             if isinstance(v, float):
                 vals[i] = '%.4f' % v
-
-    # 将所有进程信息导出到xlsx
-    async def dump_all_proc_xlsx(self, filename_pref):
-        try:
-            proc = {
-                'PID': self._pid,
-                'Command': self.pname,
-            }
-            file = await dump_all_proc_stat(filename_pref, proc)
-            log.info(f"导出所有进程信息: {file}")
-            return file
-        except Exception as ex:
-            log.error("MonitorBoot.dump_all_proc_xlsx()异常: " + str(ex), exc_info=ex)
 
 # cli入口
 def main():

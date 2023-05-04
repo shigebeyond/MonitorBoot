@@ -5,7 +5,7 @@ logs/
 *.pid
 downloads/
 build/
-HttpBoot.egg-info/
+MonitorBoot.egg-info/
 dist/
 tmp/
 data/

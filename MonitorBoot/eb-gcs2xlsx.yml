@@ -1,0 +1,30 @@
+# 开始编辑excel
+- start_edit: $file
+# Minor GC
+- switch_sheet: Minor GC
+- export_df: minor_gcs
+- cells(1): # 第一行蓝色
+      fill: lightskyblue
+#- cells(P):
+#      fill: red
+- cols(A):
+    width: 25
+- cols(E):
+    width: 12
+- cols(H:J):
+    width: 18
+# Full GC
+- switch_sheet: Full GC
+- export_df: full_gcs
+- cells(1): # 第一行蓝色
+      fill: lightskyblue
+#- cells(G):
+#      fill: red
+- cols(A):
+    width: 25
+- cols(E):
+    width: 12
+- cols(H:P):
+    width: 18
+# 结束编辑excel
+- end_edit:

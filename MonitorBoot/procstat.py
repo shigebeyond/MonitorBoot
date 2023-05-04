@@ -16,7 +16,7 @@ https://www.cnblogs.com/storyawine/p/13332052.html
 # ExcelBoot的步骤文件
 excel_boot_yaml = __file__.replace("procstat.py", "eb-allproc2xlsx.yml")
 
-async def dump_all_proc_stat(filename_pref, monitor_proc = None):
+async def all_proc_stat2xlsx(filename_pref, monitor_proc = None):
     '''
     导出所有进程统计信息
     :param filename_pref:
@@ -49,7 +49,7 @@ async def dump_all_proc_stat(filename_pref, monitor_proc = None):
         }
         pid2threads.append(item)
     # excel文件名
-    filename_pref = filename_pref or 'StatCommand'
+    filename_pref = filename_pref or 'ProcStat'
     now = ts.now2str("%Y%m%d%H%M%S")
     file = f'{filename_pref}-{now}.xlsx'
     # 设置变量
@@ -262,7 +262,7 @@ async def test():
     # df = await get_threads_df(pid)
     # print(df)
     # t = await top_cpu_thread(pid)
-    await dump_all_proc_stat("../data/Stat")
+    await all_proc_stat2xlsx("../data/Stat")
 
 if __name__ == '__main__':
     asyncio.run(test())

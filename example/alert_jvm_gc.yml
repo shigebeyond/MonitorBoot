@@ -1,13 +1,14 @@
 # 监控进程的pid
 - monitor_pid:
-    grep: java | jvisualvm
+    grep: java | visualvm | org.netbeans.Main
     when_no_run: # 没运行时执行以下步骤
-      - exec: jvisualvm
+      - exec: nohup jvisualvm & # 重启程序
 
 # 监控gc日志
 - monitor_gc_log(../logs/gc2.log):
     - when_alert: # 发生告警时要执行以下步骤
         - send_alert_email: # 发告警邮件
+        - dump_jvm_gcs_xlsx: # dump gc记录
     - alert: # 告警
           - ygc.costtime > 10 # gc耗时 > 10s
           - fgc.costtime > 10

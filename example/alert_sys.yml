@@ -1,0 +1,21 @@
+#- debug:
+# 配置邮件账号
+- config_email:
+      host: smtp.qq.com
+      password: $emailpass
+      from_name: MonitorBoot
+      from_email: 3076679995@qq.com
+      to_name: shigebeyond
+      to_email: 772910474@qq.com
+
+# 定时做系统告警
+- schedule(10):
+    - when_alert: # 发生告警时要执行以下步骤
+        - send_alert_email: # 发告警邮件
+        #- dump_jvm_heap: # dump jvm堆快照(如果你监控了jvm进程)
+        - dump_all_proc_xlsx: # dump所有进程
+    - alert: # 告警
+        # 告警条件
+        - sys.mem_free <= 1024M # 剩余内存 <= 1024M
+        - cpu_percent >= 90 # cpu使用率 >= 90%
+        # - disk_percent >= 90 # 磁盘使用率 >= 90%

@@ -27,7 +27,7 @@
     - cells(G):
           fill: red
     - cols(I):
-        width: 30
+        width: 20
 # 进程内存统计页
 - once:
     - break_if: process_mem_df is None
@@ -38,7 +38,7 @@
     - cells(G):
           fill: red
     - cols(H):
-        width: 30
+        width: 20
 # 进程io统计页
 - once:
     - break_if: process_io_df is None
@@ -47,7 +47,7 @@
     - cells(1): # 第一行蓝色
         fill: lightskyblue
     - cols(G):
-        width: 30
+        width: 20
 # 遍历top进程插入线程sheet
 - for(pid2threads):
       - switch_sheet: threads_of_pid_${for_v.pid}
@@ -57,6 +57,6 @@
       - cells(1): # 第一行蓝色
           fill: lightskyblue
       - cols(J):
-          width: 30
+          width: 20
 # 结束编辑excel
 - end_edit:

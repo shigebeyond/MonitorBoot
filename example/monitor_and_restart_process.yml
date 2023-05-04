@@ -1,0 +1,7 @@
+# 监控进程的pid，当进程不存在时重启程序
+- monitor_pid:
+    grep: java | visualvm | org.netbeans.Main # 用 `ps aux | grep` 搜索进程时要搜索的关键字，支持多个，用|分割
+    interval: 10 # 定时检查的时间间隔，可省，默认10秒
+    when_no_run: # 没运行时执行以下步骤
+      - exec: nohup jvisualvm & # 重启程序
+
