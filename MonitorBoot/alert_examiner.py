@@ -51,8 +51,12 @@ class AlertExaminer(object):
             obj = self.get_op_object(obj_name)
             if obj is None:
                 return
+
             # 读col值
             val = self.get_col_val(obj, col2)
+            if obj_name.endswith('gc') and col2 == 'interval' and val == 0: # 第一次gc是interval=0, 是没有意义的, 直接跳过
+                return
+
             # 执行操作符函数
             ret = bool(self.run_op(op, val, param))
         except Exception as ex:
