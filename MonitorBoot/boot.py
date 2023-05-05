@@ -22,6 +22,12 @@ from MonitorBoot.procinfo import ProcInfo
 from MonitorBoot.procstat import all_proc_stat2xlsx
 from MonitorBoot.sysinfo import SysInfo
 
+# 告警异常
+class AlertException(Exception):
+    def __init__(self, condition, msg):
+        super(AlertException, self).__init__(msg)
+        self.condition = condition # 告警条件
+
 # 协程线程池
 pool = EventLoopThreadPool(1)
 
@@ -51,9 +57,6 @@ class MonitorBoot(YamlBoot):
             'dump_1proc_csv': self.dump_1proc_csv,
         }
         self.add_actions(actions)
-
-        # 当前ip
-        self.ip = get_ip()
 
         # 创建调度器: 抄 SchedulerThread 的实现
         self.loop = asyncio.get_event_loop()
@@ -127,7 +130,10 @@ class MonitorBoot(YamlBoot):
         if self.debug:
             log.info(f"----- 调试模式下模拟发邮件: title = {title}, msg = {msg} -----")
             return
-        emailer.send_email(title, msg)
+        try:
+            emailer.send_email(title, msg)
+        except Exception as ex:
+            log.error("MonitorBoot.do_send_email()异常: " + str(ex), exc_info=ex)
 
     async def run_steps_async(self, steps, vars = {}, serial = True):
         '''
@@ -236,11 +242,11 @@ class MonitorBoot(YamlBoot):
             for condition in conditions:
                 condition = condition.lstrip()
                 self.do_alert(condition)
-        except Exception as ex:
+        except AlertException as ex:
             # 2 处理告警异常：异常=告警发生
-            await self.handle_alert_exception(condition, ex, int(expire_sec))
+            await self.handle_alert_exception(ex, int(expire_sec))
 
-    async def handle_alert_exception(self, condition, ex, expire_sec):
+    async def handle_alert_exception(self, ex: AlertException, expire_sec):
         '''
         处理告警异常：异常=告警发生
         :param condition: 告警条件
@@ -252,6 +258,7 @@ class MonitorBoot(YamlBoot):
         log.error(msg)
 
         # 检查该条件的告警是否没过期, 是的话就不处理同条件(同类)异常
+        condition = ex.condition
         if not self.check_alert_expired(condition, expire_sec):
             if condition in self.alert_condition_expires:
                 print("过期时间为: "+ ts.timestamp2str(self.alert_condition_expires[condition]))
@@ -264,10 +271,15 @@ class MonitorBoot(YamlBoot):
         set_var('when_alert', None)
         if steps:
             log.info("告警发生, 触发when_alert注册的动作")
+            # 用告警条件来做告警目录，以便后续放置dump文件
+            now = ts.now2str("%Y%m%d%H%M%S")
+            dir = f"alert[{condition.replace(' ', '')}]-{now}"
+            os.mkdir(dir)
             vars = {
                 'alert_msg': msg,
-                'alert_condition': condition,
+                'alert_dir': dir,
             }
+            # 执行when_alert动作
             # await self.run_steps_async(steps, vars)
             pool.exec(self.run_steps_async, steps, vars) # 耗时操作扔到线程池执行
 
@@ -294,30 +306,46 @@ class MonitorBoot(YamlBoot):
         :param condition: 告警的条件表达式，只支持简单的三元表达式，操作符只支持 =, <, >, <=, >=
                如 mem_free <= 1024M
         '''
-        # 分割字段+操作符+值
-        col, op, param = re.split(r'\s+', condition.strip(), 3)
-        # 获得col所在的对象
-        if '.' not in col:
-            col = 'sys.' + col
-        obj_name, col2 = col.split('.', 1)
-        obj = self.get_op_object(obj_name)
-        # 读col值
-        val = getattr(obj, col2)
-        # 执行操作符函数
-        ret = bool(self.run_op(op, val, param))
-        if ret:
-            msg = f"主机[{self.ip}]在{ts.now2str()}时发生告警: {col}({val}) {op} {param}"
-            raise Exception(msg)
+        try:
+            # 分割字段+操作符+值
+            col, op, param = re.split(r'\s+', condition.strip(), 3)
+            # 获得col所在的对象
+            if '.' not in col:
+                col = 'sys.' + col
+            obj_name, col2 = col.split('.', 1)
+            obj = self.get_op_object(obj_name)
+            if obj is None:
+                return
+            # 读col值
+            val = getattr(obj, col2)
+            # 执行操作符函数
+            ret = bool(self.run_op(op, val, param))
+        except Exception as ex:
+            log.error("执行告警条件[" + condition + "]错误: " + str(ex), exc_info=ex)
+            return
 
+        if ret:
+            msg = f"主机[{get_ip()}]在{ts.now2str()}时发生告警: {col}({val}) {op} {param}"
+            raise AlertException(condition, msg)
+
+    # 获得条件的操作对象: sys+proc 是必填，ygc+fgc非必填
     def get_op_object(self, obj_name):
         if 'sys' == obj_name:
-            return get_var('sys')
+            sys = get_var('sys')
+            if sys is None: # 必填
+                raise Exception('未准备sys变量')
+            return sys
+
         if 'proc' == obj_name:
+            if self._proc is None: # 必填
+                raise Exception("没用使用动作 monitor_pid/grep_pid 来监控进程")
             return self._proc
+
         if 'ygc' == obj_name:
-            return self.check_current_gc(False)
+            return self.get_current_gc(False)
+
         if 'fgc' == obj_name:
-            return self.check_current_gc(True)
+            return self.get_current_gc(True)
         raise Exception(f"Invalid object name: {obj_name}")
 
     def run_op(self, op, val, param):
@@ -442,9 +470,9 @@ class MonitorBoot(YamlBoot):
                 await self.run_steps_async(steps, vars)
         self.do_tail(file, read_line)
 
-    def check_current_gc(self, is_full):
+    def get_current_gc(self, is_full):
         '''
-        检查当前gc信息
+        获得当前gc信息
         :param is_full: 是否full gc
         :return:
         '''
@@ -454,7 +482,7 @@ class MonitorBoot(YamlBoot):
             raise Exception('当前子动作没有定义在 monitor_gc_log 动作内')
 
         # 匹配gc类型
-        if gc['is_full'] != is_full:
+        if gc['is_full'] == is_full:
             return None
 
         return gc
@@ -507,7 +535,7 @@ class MonitorBoot(YamlBoot):
 
             # 如果有告警就用告警条件作为文件名前缀
             filename_pref = self.fix_alert_filename_pref(filename_pref, "JvmGC")
-            file = await self.gc_parser.gcs2xlsx(filename_pref)
+            file = self.gc_parser.gcs2xlsx(filename_pref)
             log.info(f"导出jvm gc信息: {file}")
             return file
         except Exception as ex:
@@ -533,11 +561,10 @@ class MonitorBoot(YamlBoot):
     # 如果有告警就用告警条件作为文件名前缀
     def fix_alert_filename_pref(self, filename_pref, default):
         if filename_pref is None:
-            # 如果有告警就用告警条件作为文件名前缀
-            condition = get_var('alert_condition')
-            if condition is not None:
-                condition = condition.replace(' ', '')
-                filename_pref = f"{default}OnAlert[{condition}]"
+            # 如果有告警放到告警目录下
+            alert_dir = get_var('alert_dir')
+            if alert_dir is not None:
+                filename_pref = f"{alert_dir}/{default}"
 
         return filename_pref or default
 
