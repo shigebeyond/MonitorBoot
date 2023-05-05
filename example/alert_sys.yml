@@ -1,4 +1,4 @@
-#- debug:
+- debug: # 调试模式，不会真正发邮件
 # 配置邮件账号
 - config_email:
       host: smtp.qq.com

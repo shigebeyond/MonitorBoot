@@ -1,16 +1,28 @@
+# 准备：要先启动 kt-test 项目中的java主类 vm.chapter2.GcTestForMonitorBoot
+- debug: # 调试模式，不会真正发邮件
+
+# 配置邮件账号
+- config_email:
+      host: smtp.qq.com
+      password: $emailpass
+      from_name: MonitorBoot
+      from_email: 3076679995@qq.com
+      to_name: shigebeyond
+      to_email: 772910474@qq.com
+
 # 监控进程的pid
 - monitor_pid:
-    grep: java | visualvm | org.netbeans.Main
-    when_no_run: # 没运行时执行以下步骤
-      - exec: nohup jvisualvm & # 重启程序
+    grep: java | GcTestForMonitorBoot
 
 # 监控gc日志
-- monitor_gc_log(../logs/gc2.log):
+- monitor_gc_log(/home/shi/code/testing/kt-test/gc.log):
     - when_alert: # 发生告警时要执行以下步骤
         - send_alert_email: # 发告警邮件
+        - dump_jvm_heap: # dump jvm堆快照(如果你监控了jvm进程)
+        - dump_jvm_thread: # dump jvm线程栈(如果你监控了jvm进程)
         - dump_jvm_gcs_xlsx: # dump gc记录
     - alert: # 告警
-          - ygc.costtime > 10 # gc耗时 > 10s
-          - fgc.costtime > 10
-          - fgc.interval < 1 # gc间隔时间 < 1s
+          - ygc.costtime > 5 # gc耗时 > 5s
+          - fgc.costtime > 5
+          - fgc.interval < 10 # gc间隔时间 < 10s
 
