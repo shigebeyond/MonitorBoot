@@ -2,7 +2,9 @@ import os
 import re
 from pyutilb import ts
 from pyutilb.file import read_file
+from pyutilb.log import log
 from pyutilb.strs import substr_before
+from pyutilb.tail import Tail
 from pyutilb.util import set_vars
 from ExcelBoot.boot import Boot as EBoot
 
@@ -50,51 +52,54 @@ class GcLogParser(object):
         '''
         if ': [' not in line:
             return None
-        gens = []
-        # print("解析gc行: " + line)
-        line = line.replace('--', '') # 特殊例子: 0.095: [GC (Allocation Failure) --[PSYoungGen: 1520K->1520K(1536K)] 4784K->5608K(5632K), 0.0099458 secs] [Times: user=0.03 sys=0.00, real=0.01 secs]
-        # 1 处理几个年代的空间+时间
-        items = re.findall('\[[^\[^\]]+\]', line)
-        for item in items:
-            # 1.1 解析单个年代
-            if item.startswith('[Times:'): # 忽略 [Times: user=0.13 sys=0.00, real=0.04 secs]
-                # print("忽略非年代: " + item)
-                pass
-            else: # 解析单个年代
-                data = self.parse_gen(item)
-                if data is None:
-                    raise Exception("解析年代失败: " + item)
-                # print("解析年代: " + item + ", 结果为: " + str(data))
-                gens.append(data) # 记录解析结果
-            # 1.2 去掉解析过的年代部分字符串
-            line = line.replace(item, '')
-            # print("剩余gc行: " + line)
+        try:
+            gens = []
+            # print("解析gc行: " + line)
+            line = line.replace('--', '') # 特殊例子: 0.095: [GC (Allocation Failure) --[PSYoungGen: 1520K->1520K(1536K)] 4784K->5608K(5632K), 0.0099458 secs] [Times: user=0.03 sys=0.00, real=0.01 secs]
+            # 1 处理几个年代的空间+时间
+            items = re.findall('\[[^\[^\]]+\]', line)
+            for item in items:
+                # 1.1 解析单个年代
+                if item.startswith('[Times:'): # 忽略 [Times: user=0.13 sys=0.00, real=0.04 secs]
+                    # print("忽略非年代: " + item)
+                    pass
+                else: # 解析单个年代
+                    data = self.parse_gen(item)
+                    if data is None:
+                        raise Exception("解析年代失败: " + item)
+                    # print("解析年代: " + item + ", 结果为: " + str(data))
+                    gens.append(data) # 记录解析结果
+                # 1.2 去掉解析过的年代部分字符串
+                line = line.replace(item, '')
+                # print("剩余gc行: " + line)
 
-        # 2 处理总的空间+时间
-        # 如 0.089: [Full GC (Ergonomics)   4848K->4088K(5632K), , 0.0416957 secs]
-        # 如 0.084: [GC (Allocation Failure)  3556K->2886K(5632K), 0.0039928 secs]
-        line = line.replace(', ,', ',').replace(') ', '):')
-        gc = self.parse_gen(line)
-        gc['jvm_time'] = substr_before(line, ': [') # gc发生时vm运行了多少秒
-        is_full = 'Full GC' in line
-        # 计算两次gc之间的时间间隔
-        lastgc = self.last_gc(is_full)
-        if lastgc is None:
-            # gc['interval'] = gc['jvm_time'] # 你不知道他是从啥时开始监控日志的，也不知道监控之前有没有gc过
-            gc['interval'] = 0
-        else:
-            gc['interval'] = float(gc['jvm_time']) - float(lastgc['jvm_time'])
-        gc['is_full'] = is_full
-        # print("解析总年代: " + line + ", 结果为: " + str(gc))
+            # 2 处理总的空间+时间
+            # 如 0.089: [Full GC (Ergonomics)   4848K->4088K(5632K), , 0.0416957 secs]
+            # 如 0.084: [GC (Allocation Failure)  3556K->2886K(5632K), 0.0039928 secs]
+            line = line.replace(', ,', ',').replace(') ', '):')
+            gc = self.parse_gen(line)
+            gc['jvm_time'] = substr_before(line, ': [') # gc发生时vm运行了多少秒
+            is_full = 'Full GC' in line
+            # 计算两次gc之间的时间间隔
+            lastgc = self.last_gc(is_full)
+            if lastgc is None:
+                # gc['interval'] = gc['jvm_time'] # 你不知道他是从啥时开始监控日志的，也不知道监控之前有没有gc过
+                gc['interval'] = 0
+            else:
+                gc['interval'] = float(gc['jvm_time']) - float(lastgc['jvm_time'])
+            gc['is_full'] = is_full
+            # print("解析总年代: " + line + ", 结果为: " + str(gc))
 
-        # 3 展平多个年代
-        # gc['gens'] = gens
-        self.flatten_gens(gc, gens)
+            # 3 展平多个年代
+            # gc['gens'] = gens
+            self.flatten_gens(gc, gens)
 
-        # print(gc)
-        if gc is not None:
+            # print(gc)
             self.gcs.append(gc)
-        return gc
+            return gc
+        except Exception as ex:
+            log.error("GcLogParser.parse_gc_line()异常: " + str(ex), exc_info=ex)
+            return None
 
     # 解析一代: 如 [PSYoungGen: 1536K->0K(1536K)]
     def parse_gen(self, gen):
@@ -110,7 +115,7 @@ class GcLogParser(object):
         # 总的才有secs部分
         secs = mat.group(6)
         if secs is not None:
-            data['cost_time'] = float(secs)
+            data['costtime'] = float(secs)
         return data
 
     def flatten_gens(self, gc, gens):
@@ -134,9 +139,9 @@ class GcLogParser(object):
         ret = []
         for gc in self.gcs:
             if gc['is_full'] == is_full:
-                gc = gc.copy()
-                del gc['is_full']
-                ret.append(gc)
+                gc2 = gc.copy()
+                del gc2['is_full']
+                ret.append(gc2)
         return ret
 
     # 获得full gc
@@ -164,17 +169,46 @@ class GcLogParser(object):
             'full_gcs': self.full_gcs(),
         }
         set_vars(vars)
+        log.debug('----------------')
+        log.debug(f"gcs={len(self.gcs)}, minor_gcs={len(vars['minor_gcs'])}, full_gcs={len(vars['full_gcs'])}")
+        log.debug(vars)
+        log.debug(self.gcs)
+        log.debug('----------------')
+
         # 导出excel
         boot = EBoot()
         boot.run_1file(excel_boot_yaml)
         return file
 
 if __name__ == '__main__':
+    # file = '../logs/gc2.log'
+    file = '/home/shi/code/testing/kt-test/gc.log'
+    parser = GcLogParser(file)
+
+    # 1 测试解析单行
+    '''
     line = '0.084: [GC (Allocation Failure) [PSYoungGen: 1525K->512K(1536K)] 3556K->2886K(5632K), 0.0039928 secs] [Times: user=0.01 sys=0.00, real=0.00 secs]'
     line = '0.089: [Full GC (Ergonomics) [PSYoungGen: 1536K->0K(1536K)] [ParOldGen: 3312K->4088K(4096K)] 4848K->4088K(5632K), [Metaspace: 3313K->3313K(1056768K)], 0.0416957 secs] [Times: user=0.13 sys=0.00, real=0.04 secs]'
-    parser = GcLogParser('../logs/gc2.log')
-    # parser.parse_gc_line(line)
+    parser.parse_gc_line(line)
+    '''
+
+    # 2 测试解析整个log文件
+    '''
     parser.parse()
     for gc in parser.gcs:
         print(gc)
+
+    # 3 导出excel
     parser.gcs2xlsx(None)
+    '''
+    # 4 测试tail
+    t = Tail(file, from_end=False)
+    i = 0
+    def handle_line(line):
+        gc = parser.parse_gc_line(line)
+        print(gc)
+        global i
+        i += 1
+        if i == 13:
+            parser.gcs2xlsx(None)
+    t.follow(handle_line)

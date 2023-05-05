@@ -279,8 +279,6 @@ class MonitorBoot(YamlBoot):
             self.alert_condition_expires[condition] = now + expire_sec
         return ret
 
-
-
     # 发送告警邮件
     def send_alert_email(self, _):
         # 发邮件
@@ -289,7 +287,9 @@ class MonitorBoot(YamlBoot):
             title = substr_before(msg, ': ')
         else:
             title = msg
-        msg = msg + "\n详细日志与导出文件在目录: " + os.getcwd()
+        # alert_dir = os.getcwd()
+        alert_dir = os.path.abspath(get_var('alert_dir'))
+        msg = msg + "\n详细日志与导出文件在目录: " + alert_dir
         self.do_send_email(title, msg)
 
     # -------------------------------- 监控进程 -----------------------------------
@@ -374,6 +374,7 @@ class MonitorBoot(YamlBoot):
         if self.gc_parser is not None:
             raise Exception('只支持解析单个gc log')
         self.gc_parser = GcLogParser(file)
+        self.gc_parser.parse() # 先解析整个gc log，但不触发报警，只是为了记录历史gc
         async def read_line(line):
             # 解析gc信息
             gc = self.gc_parser.parse_gc_line(line)
@@ -397,9 +398,9 @@ class MonitorBoot(YamlBoot):
 
         # 匹配gc类型
         if gc['is_full'] == is_full:
-            return None
+            return gc
 
-        return gc
+        return None
 
     # -------------------------------- dump -----------------------------------
     async def dump_jvm_heap(self, filename_pref):
