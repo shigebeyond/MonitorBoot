@@ -5,7 +5,6 @@ import os
 import time
 import uuid
 from asyncio import coroutines
-
 import psutil
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pyutilb.asyncio_threadpool import get_running_loop
@@ -17,16 +16,11 @@ from pyutilb.cmd import *
 from pyutilb import YamlBoot, EventLoopThreadPool, ts
 from pyutilb.log import log
 from MonitorBoot import emailer
+from MonitorBoot.alert_examiner import AlertException, AlertExaminer
 from MonitorBoot.gc_log_parser import GcLogParser
 from MonitorBoot.procinfo import ProcInfo
 from MonitorBoot.procstat import all_proc_stat2xlsx
 from MonitorBoot.sysinfo import SysInfo
-
-# 告警异常
-class AlertException(Exception):
-    def __init__(self, condition, msg):
-        super(AlertException, self).__init__(msg)
-        self.condition = condition # 告警条件
 
 # 协程线程池
 pool = EventLoopThreadPool(1)
@@ -76,24 +70,9 @@ class MonitorBoot(YamlBoot):
         self._proc = None
 
         # ----- 告警处理 -----
-        # 告警字段
-        self.alert_cols = [
-            'mem_free',
-            'cpu_percent',
-            'disk_percent',
-            'ygc.costtime',
-            'ygc.interval',
-            'fgc.costtime',
-            'fgc.interval',
-        ]
-        # 操作符函数映射
-        self.ops = {
-            '=': lambda val, param: float(val) == float(param),
-            '>': lambda val, param: float(val) > float(param),
-            '<': lambda val, param: float(val) < float(param),
-            '>=': lambda val, param: float(val) >= float(param),
-            '<=': lambda val, param: float(val) <= float(param),
-        }
+        # 告警条件的检查者
+        self.alert_examiner = AlertExaminer(self)
+
         # 记录告警条件的过期时间, key是告警条件(表示类型), value是过期时间，没过期就不处理告警，用来限制同条件的告警的处理频率，如限制导出进程xlsx或发邮件
         self.alert_condition_expires = {}
 
@@ -241,7 +220,7 @@ class MonitorBoot(YamlBoot):
             # 1 逐个表达式来执行告警，如果报警发生则报异常
             for condition in conditions:
                 condition = condition.lstrip()
-                self.do_alert(condition)
+                self.alert_examiner.run(condition)
         except AlertException as ex:
             # 2 处理告警异常：异常=告警发生
             await self.handle_alert_exception(ex, int(expire_sec))
@@ -300,72 +279,7 @@ class MonitorBoot(YamlBoot):
             self.alert_condition_expires[condition] = now + expire_sec
         return ret
 
-    def do_alert(self, condition):
-        '''
-        处理单个字段的告警，如果符合条件，则抛出报警异常
-        :param condition: 告警的条件表达式，只支持简单的三元表达式，操作符只支持 =, <, >, <=, >=
-               如 mem_free <= 1024M
-        '''
-        try:
-            # 分割字段+操作符+值
-            col, op, param = re.split(r'\s+', condition.strip(), 3)
-            # 获得col所在的对象
-            if '.' not in col:
-                col = 'sys.' + col
-            obj_name, col2 = col.split('.', 1)
-            obj = self.get_op_object(obj_name)
-            if obj is None:
-                return
-            # 读col值
-            val = getattr(obj, col2)
-            # 执行操作符函数
-            ret = bool(self.run_op(op, val, param))
-        except Exception as ex:
-            log.error("执行告警条件[" + condition + "]错误: " + str(ex), exc_info=ex)
-            return
 
-        if ret:
-            msg = f"主机[{get_ip()}]在{ts.now2str()}时发生告警: {col}({val}) {op} {param}"
-            raise AlertException(condition, msg)
-
-    # 获得条件的操作对象: sys+proc 是必填，ygc+fgc非必填
-    def get_op_object(self, obj_name):
-        if 'sys' == obj_name:
-            sys = get_var('sys')
-            if sys is None: # 必填
-                raise Exception('未准备sys变量')
-            return sys
-
-        if 'proc' == obj_name:
-            if self._proc is None: # 必填
-                raise Exception("没用使用动作 monitor_pid/grep_pid 来监控进程")
-            return self._proc
-
-        if 'ygc' == obj_name:
-            return self.get_current_gc(False)
-
-        if 'fgc' == obj_name:
-            return self.get_current_gc(True)
-        raise Exception(f"Invalid object name: {obj_name}")
-
-    def run_op(self, op, val, param):
-        '''
-        执行操作符：就是调用函数
-        :param op: 操作符
-        :param val: 校验的值
-        :param param: 参数
-        :return:
-        '''
-        # 处理参数: 文件大小字符串换算为字节数
-        if param[-1] in file_size_units:
-           param = file_size2bytes(param)
-        # 校验操作符
-        if op not in self.ops:
-            raise Exception(f'Invalid validate operator: {op}')
-        # 调用校验函数
-        # log.debug(f"Call operator: {op}={param}")
-        op = self.ops[op]
-        return op(val, param)
 
     # 发送告警邮件
     def send_alert_email(self, _):
