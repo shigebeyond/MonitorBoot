@@ -37,7 +37,7 @@ class PresleepMixin(object):
 class SysInfo(PresleepMixin):
 
     # 要睡1s的字段
-    sleep_fields = 'cpu_percent|dio|nio'.split('|')
+    sleep_fields = 'cpu_percent|disk_read|disk_write|net_recv|net_sent'.split('|')
 
     def __init__(self):
         self.last_dio = None # 记录上一秒磁盘io统计(读写字节数)，以便通过下一秒的值的对比来计算读写速率
@@ -52,11 +52,11 @@ class SysInfo(PresleepMixin):
             psutil.cpu_percent()  # 对 psutil.cpu_percent(1) 的异步实现
             return True
 
-        if 'dio' in expr:
+        if 'disk_read' in expr or 'disk_write' in expr:
             self.last_dio = psutil.disk_io_counters()
             return True
 
-        if 'nio' in expr:
+        if 'net_recv' in expr or 'net_sent' in expr:
             self.last_nio = psutil.net_io_counters()
             return True
 

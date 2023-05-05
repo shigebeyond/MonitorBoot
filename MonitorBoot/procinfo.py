@@ -11,7 +11,7 @@ from MonitorBoot.sysinfo import PresleepMixin
 class ProcInfo(PresleepMixin):
 
     # 要睡1s的字段
-    sleep_fields = 'cpu_percent|dio'.split('|')
+    sleep_fields = 'cpu_percent|disk_read|disk_write'.split('|')
 
     def __init__(self, pid):
         self.pid = pid
