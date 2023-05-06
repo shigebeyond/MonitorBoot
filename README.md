@@ -3,9 +3,9 @@
 # MonitorBoot - yaml驱动linux系统监控
 
 ## 概述
-框架通过编写简单的yaml, 就可以执行一系列复杂的系统或进程性能监控处理, 如告警/dump jvm堆快照/dump jvm线程栈/提取变量/打印变量等，极大的简化了伙伴编写监控脚本的工作量与工作难度，大幅提高人效；
+框架通过编写简单的yaml, 就可以实现复杂的性能监控与告警处理, 如告警/dump jvm堆快照/dump jvm线程栈/提取变量/打印变量等，极大的简化了伙伴编写监控脚本的工作量与工作难度，大幅提高人效；
 
-框架通过提供类似python`for`/`if`/`break`语义的步骤动作，赋予伙伴极大的开发能力与灵活性，能适用于广泛的监控场景。
+框架通过支持3类17个指标的告警，适用于广泛的监控与告警场景。
 
 框架提供`include`机制，用来加载并执行其他的步骤yaml，一方面是功能解耦，方便分工，一方面是功能复用，提高效率与质量，从而推进监控脚本整体的工程化。
 
@@ -15,13 +15,12 @@
 1. 支持通过yaml来配置执行的步骤，简化了监控脚本开发:
 每个步骤可以有多个动作，但单个步骤中动作名不能相同（yaml语法要求）;
 动作代表一种监控操作，如schedule/alert/send_email/dump_sys_csv等等;
-2. 支持类似python`for`/`if`/`break`语义的步骤动作，灵活适应各种场景;
-3. 支持用`include`动作引用其他的yaml配置文件，以便解耦与复用;
-4. 支持用`schedule`动作来实现定时处理;
-5. 支持用`monitor_gc_log`动作来订阅与解析gc log，以便分析与监控gc耗时或频率;
-6. 支持3类指标的告警: 1 系统性能指标 2 进程性能指标 3 gc耗时或频率指标
-7. 支持导出多种性能报告文件，如jvm堆快照/jvm线程栈/gc记录的xlsx/所有进程信息的xlsx/有时序的系统性能指标的csv/有时序的进程性能指标的csv
-8. 定时处理与异步执行命令都是使用协程来实现，高性能。
+2. 支持用`include`动作引用其他的yaml配置文件，以便解耦与复用;
+3. 支持用`schedule`动作来实现定时处理;
+4. 支持用`monitor_gc_log`动作来订阅与解析gc log，以便分析与监控gc耗时或频率;
+5. 支持3类17个指标的告警: 1 系统性能指标 2 进程性能指标 3 gc耗时或频率指标
+6. 支持导出多种性能报告文件，如jvm堆快照/jvm线程栈/gc记录的xlsx/所有进程信息的xlsx/有时序的系统性能指标的csv/有时序的进程性能指标的csv
+7. 定时处理与异步执行命令都是使用协程来实现，高性能。
 
 ## 同类yaml驱动的框架
 [HttpBoot](https://github.com/shigebeyond/HttpBoot)
@@ -35,6 +34,7 @@
 
 ## 安装
 ```
+sudo apt install sysstat
 pip3 install MonitorBoot
 ```
 
@@ -80,7 +80,6 @@ MonitorBoot 步骤配置目录/step-*.yml
 动作代表一种监控操作，如schedule/alert/send_email/dump_sys_csv等等;
 
 下面详细介绍每个动作:
-
 1. sleep: 线程睡眠; 
 ```yaml
 sleep: 2 # 线程睡眠2秒
@@ -105,13 +104,32 @@ ${random_str(6)} 支持调用函数，目前仅支持以下几个函数: random_
 
 函数罗列:
 ```
+now(): 当前时间字符串
 random_str(n): 随机字符串，参数n是字符个数
 random_int(n): 随机数字，参数n是数字个数
 random_element(var): 从list中随机挑选一个元素，参数var是list类型的变量名
 incr(key): 自增值，从1开始，参数key表示不同的自增值，不同key会独立自增
 ```
 
-3. config_email: 配置邮件信息
+3. include: 包含其他步骤文件，如记录公共的步骤，或记录配置数据(如用户名密码); 
+```yaml
+include: part-common.yml
+```
+
+4. set_vars: 设置变量; 
+```yaml
+set_vars:
+  name: shi
+  password: 123456
+  birthday: 5-27
+```
+
+5. print_vars: 打印所有变量; 
+```yaml
+print_vars:
+```
+
+6. config_email: 配置邮件信息
 ```yaml
 - config_email:
       host: smtp.qq.com
@@ -122,14 +140,14 @@ incr(key): 自增值，从1开始，参数key表示不同的自增值，不同ke
       to_email: bbb@qq.com
 ```
 
-4. send_email: 发送邮件
+7. send_email: 发送邮件
 ```yaml
 - send_email:
     title: hello
     msg: hello world
 ```
 
-5. schedule: 定时处理，就是每隔指定秒数就执行下子步骤
+8. schedule: 定时处理，就是每隔指定秒数就执行下子步骤
 ```yaml
 # 定时处理
 - schedule(5): # 每隔5秒 
@@ -137,14 +155,14 @@ incr(key): 自增值，从1开始，参数key表示不同的自增值，不同ke
     - print: '每隔5s触发: ${now()}'
 ```
 
-6. tail: 订阅文件中最新增加的行，其中变量 tail_line 记录最新增加的行
+9. tail: 订阅文件中最新增加的行，其中变量 tail_line 记录最新增加的行
 ```yaml
 - tail(/home/shi/test.log): # 订阅文件 /home/shi/test.log   
     # 执行子步骤，能读到变量 tail_line
     - print: '最新行: $tail_line'
 ```
 
-7. alert: 告警处理
+10. alert: 告警处理动作，他会逐个执行告警条件，如果满足条件则发生告警并调用`when_alert`注册的子步骤
 ```yaml
 - alert: # 告警
     # 告警条件
@@ -152,6 +170,7 @@ incr(key): 自增值，从1开始，参数key表示不同的自增值，不同ke
     - sys.cpu_percent >= 90 # cpu使用率 >= 90%
     - sys.mem_used >= 1024M # 已使用内存 >= 1024M
     - sys.mem_free <= 1024M # 剩余内存 <= 1024M
+    - sys.mem_percent >= 90 # 内存使用率 >= 90%
     - sys.disk_percent >= 90 # 磁盘使用率 >= 90%
     - sys.disk_read >= 10M # 读速率 >= 10M
     - sys.disk_write >= 10M # 写速率 >= 10M
@@ -159,7 +178,7 @@ incr(key): 自增值，从1开始，参数key表示不同的自增值，不同ke
     - sys.net_sent >= 10M # 发送速率 >= 10M
 
     # 2 监控的进程的性能指标相关的条件，仅在有监控进程的情况下使用
-    - proc.cpu_percent >=90 # cpu的使用频率 >= 90%
+    - proc.cpu_percent >= 90 # cpu的使用频率 >= 90%
     - proc.mem_used >= 1024M # 已用内存 >= 1024M
     - proc.mem_percent >= 1024M # 内存使用率 >= 1024M
     - proc.disk_read >= 10M # 读速率 >= 10M
@@ -170,20 +189,64 @@ incr(key): 自增值，从1开始，参数key表示不同的自增值，不同ke
     - fgc.costtime > 5
     - fgc.interval < 10 # full gc间隔时间 < 10s
 ```
+告警条件格式: `指标 操作符 对比值`，其中指标与操作符有：
 
-8. when_alert: 记录当发生告警要调用的动作
+10.1 系统的性能指标
+
+| 指标名 | 含义 |
+| ------------ | ------------ |
+| sys.cpu_percent | cpu使用率 |
+| sys.mem_used | 已使用内存 |
+| sys.mem_free | 剩余内存 |
+| sys.mem_percent | 内存使用率 |
+| sys.disk_percent | 磁盘使用率 |
+| sys.disk_read | 读速率 |
+| sys.disk_write | 写速率 |
+| sys.net_recv | 接收速率 |
+| sys.net_sent | 发送速率 |
+
+10.2 进程的性能指标
+
+| 指标名 | 含义 |
+| ------------ | ------------ |
+| proc.cpu_percent | cpu的使用频率 |
+| proc.mem_used | 已用内存 |
+| proc.mem_percent | 内存使用率 |
+| proc.disk_read | 读速率 |
+| proc.disk_write | 写速率 |
+
+10.3 gc记录的耗时与频率指标
+
+| 指标名 | 含义 |
+| ------------ | ------------ |
+| ygc.costtime | minor gc耗时 |
+| ygc.interval | minor gc间隔时间 |
+| fgc.costtime | full gc耗时 |
+| fgc.interval | full gc间隔时间 |
+
+10.4 操作符
+
+| 操作符 | 含义 |
+| ------------ | ------------ |
+| `=` | 相同 |
+| `>` | 大于 |
+| `<` | 小于 |
+| `>=` | 大于等于 |
+| `<=` | 小于等于 |
+
+11. when_alert: 记录当发生告警要调用的子步骤
 ```yaml
 - when_alert: # 发生告警时要执行以下子步骤
     # 子步骤
     - send_alert_email: # 发告警邮件
 ```
 
-9. send_alert_email: 发告警邮件
+12. send_alert_email: 发告警邮件
 ```yaml
 - send_alert_email: # 发告警邮件
 ```
 
-10. monitor_pid: 监控进程的pid，其实现就是定时调用 grep_pid 动作
+13. monitor_pid: 监控进程的pid，其实现就是定时调用 grep_pid 动作
 ```yaml
 # 监控进程的pid
 - monitor_pid:
@@ -193,12 +256,12 @@ incr(key): 自增值，从1开始，参数key表示不同的自增值，不同ke
       - exec: nohup jvisualvm & # 重启程序
 ```
 
-11. grep_pid: 搜索进程的pid
+14. grep_pid: 搜索进程的pid
 ```yaml
 grep_pid: java | visualvm | org.netbeans.Main # 用 `ps aux | grep` 搜索进程时要搜索的关键字，支持多个，用|分割
 ```
 
-12. monitor_gc_log: 监控gc日志
+15. monitor_gc_log: 监控gc日志
 ```yaml
 # 监控gc日志
 - monitor_gc_log(/home/shi/code/testing/kt-test/gc.log):
@@ -211,39 +274,39 @@ grep_pid: java | visualvm | org.netbeans.Main # 用 `ps aux | grep` 搜索进程
           - fgc.interval < 10 # gc间隔时间 < 10s
 ```
 
-13. dump_jvm_heap: 导出jvm堆快照
+16. dump_jvm_heap: 导出jvm堆快照
 ```yaml
 - dump_jvm_heap: # dump jvm堆快照(如果你监控了jvm进程)
 ```
 
-14. dump_jvm_thread: 导出jvm线程栈
+17. dump_jvm_thread: 导出jvm线程栈
 ```yaml
 - dump_jvm_thread: # dump jvm线程栈(如果你监控了jvm进程)
 ```
 
-15. dump_jvm_gcs_xlsx: 导出gc记录的xlsx
+18. dump_jvm_gcs_xlsx: 导出gc记录的xlsx
 ```yaml
 - dump_jvm_gcs_xlsx: # dump gc记录
 ```
 
-16. dump_all_proc_xlsx: 导出所有进程信息的xlsx
+19. dump_all_proc_xlsx: 导出所有进程信息的xlsx
 ```yaml
 - dump_all_proc_xlsx: # dump所有进程
 ```
 
-17. dump_sys_csv: 将系统性能指标导出到csv中，性能指标有：cpu%/s, mem%/s, mem_used(MB), disk_read(MB/s), disk_write(MB/s), net_sent(MB/s), net_recv(MB/s)；一般配合`schedule`动作来使用
+20. dump_sys_csv: 将系统性能指标导出到csv中，性能指标有：cpu%/s, mem%/s, mem_used(MB), disk_read(MB/s), disk_write(MB/s), net_sent(MB/s), net_recv(MB/s)；一般配合`schedule`动作来使用
 ```yaml
 - dump_sys_csv:
 - dump_sys_csv: 导出的csv文件前缀
 ```
 
-18. dump_1proc_csv: 将当前被监控的进程的性能指标导出到csv中，性能指标有：cpu%/s, mem_used(MB), mem%, status；一般配合`schedule`动作来使用
+21. dump_1proc_csv: 将当前被监控的进程的性能指标导出到csv中，性能指标有：cpu%/s, mem_used(MB), mem%, status；一般配合`schedule`动作来使用
 ```yaml
 - dump_1proc_csv:
 - dump_1proc_csv: 导出的csv文件前缀
 ```
 
-19. exec: 执行命令
+22. exec: 执行命令
 ```yaml
 exec: ls
 ```

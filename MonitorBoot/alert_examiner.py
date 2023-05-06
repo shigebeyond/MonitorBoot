@@ -1,8 +1,10 @@
+import asyncio
+from MonitorBoot.sysinfo import SysInfo
 from pyutilb import ts
 from pyutilb.cmd import get_ip
 from pyutilb.file import *
 from pyutilb.log import log
-from pyutilb.util import get_var
+from pyutilb.util import get_var, set_var
 
 # 告警异常
 class AlertException(Exception):
@@ -14,11 +16,26 @@ class AlertException(Exception):
 class AlertExaminer(object):
     # 告警字段
     alert_cols = [
-        'sys.mem_free',
+        # 1 系统的性能指标相关的条件
         'sys.cpu_percent',
+        'sys.mem_used',
+        'sys.mem_free',
+        'sys.mem_percent',
         'sys.disk_percent',
+        'sys.disk_read',
+        'sys.disk_write',
+        'sys.net_recv',
+        'sys.net_sent',
+
+        # 2 监控的进程的性能指标相关的条件，仅在有监控进程的情况下使用
+        'proc.cpu_percent',
+        'proc.mem_used',
+        'proc.mem_percent',
+        'proc.disk_read',
+        'proc.disk_write',
+
+        # 3 gc指标相关的条件，仅在有监控gc log的情况下使用
         'ygc.costtime',
-        'ygc.interval',
         'fgc.costtime',
         'fgc.interval',
     ]
@@ -43,10 +60,12 @@ class AlertExaminer(object):
         '''
         try:
             # 分割字段+操作符+值
-            col, op, param = re.split(r'\s+', condition.strip(), 3)
+            col, op, param = self.parse_condition(condition)
             # 获得col所在的对象
             if '.' not in col:
                 col = 'sys.' + col
+            if col not in self.alert_cols:
+                raise Exception('无效告警字段: ' + col)
             obj_name, col2 = col.split('.', 1)
             obj = self.get_op_object(obj_name)
             if obj is None:
@@ -66,6 +85,18 @@ class AlertExaminer(object):
         if ret:
             msg = f"主机[{get_ip()}]在{ts.now2str()}时发生告警: {col}({val}) {op} {param}"
             raise AlertException(condition, msg)
+
+    # 解析条件：分割字段+操作符+值
+    def parse_condition(self, condition):
+        # 1. 空格分割: wrong 有可能无空格
+        # return re.split(r'\s+', condition.strip(), 3)
+
+        # 2. 三元素正则匹配
+        mat = re.match('([\w\.]+)\s*([><=]+)\s*(\d+\w?)', condition.strip())
+        if mat is None:
+            raise Exception("无效条件表达式: " + condition)
+
+        return mat.group(1), mat.group(2), mat.group(3)
 
     # 获得条件的操作对象: sys+proc 是必填，ygc+fgc非必填
     def get_op_object(self, obj_name):
@@ -109,9 +140,28 @@ class AlertExaminer(object):
            param = file_size2bytes(param)
         # 校验操作符
         if op not in self.ops:
-            raise Exception(f'Invalid validate operator: {op}')
+            raise Exception(f'无效校验符: {op}')
         # 调用校验函数
         # log.debug(f"Call operator: {op}={param}")
         op = self.ops[op]
         return op(val, param)
+
+
+async def test():
+    sys = await SysInfo().presleep_all_fields()
+    set_var('sys', sys)
+    boot = None
+    e = AlertExaminer(boot)
+    e.run(condition)
+
+if __name__ == '__main__':
+    condition = ' sys.net_sent >=10M '
+    '''
+    mat = re.match('([\w\.]+)\s*([><=]+)\s*(\d+\w?)', condition.strip())
+    print(mat)
+    for i in range(1, 4):
+        print(mat.group(i))
+    '''
+    asyncio.run(test())
+
 
