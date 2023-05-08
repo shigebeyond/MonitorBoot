@@ -1,6 +1,15 @@
 # 开始编辑excel
 - start_edit: $file
-# Minor GC
+# 1 All GC
+- switch_sheet: All GC
+- export_df: all_gcs
+- cells(1): # 第一行蓝色
+      fill: lightskyblue
+- cols(A):
+    width: 25
+- cols(E):
+    width: 12
+# 2 Minor GC
 - switch_sheet: Minor GC
 - export_df: minor_gcs
 - cells(1): # 第一行蓝色
@@ -13,7 +22,7 @@
     width: 12
 - cols(H:J):
     width: 18
-# Full GC
+# 3 Full GC
 - switch_sheet: Full GC
 - export_df: full_gcs
 - cells(1): # 第一行蓝色
@@ -26,5 +35,20 @@
     width: 12
 - cols(H:P):
     width: 18
+# 4 All GC Bins
+- switch_sheet: All GC Bins
+- export_df: all_gc_bins
+- cells(1): # 第一行蓝色
+      fill: lightskyblue
+# 5 Minor GC Bins
+- switch_sheet: Minor GC Bins
+- export_df: minor_gc_bins
+- cells(1): # 第一行蓝色
+      fill: lightskyblue
+# 6 Full GC Bins
+- switch_sheet: Full GC Bins
+- export_df: full_gc_bins
+- cells(1): # 第一行蓝色
+      fill: lightskyblue
 # 结束编辑excel
 - end_edit:

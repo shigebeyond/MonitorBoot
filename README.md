@@ -316,6 +316,7 @@ grep_pid: java | visualvm | org.netbeans.Main # 用 `ps aux | grep` 搜索进程
 ![](img/process_io_stat.png)
 ![](img/process_mem_stat.png)
 ![](img/threads_of_pid_7558.png)
+最后一个为指定进程的线程信息，最后一列`nid`为线程id的16进制，拿着`nid`可在导出的jvm线程栈文件去找对应线程信息
 
 20. dump_sys_csv: 将系统性能指标导出到csv中，性能指标有：cpu%/s, mem%/s, mem_used(MB), disk_read(MB/s), disk_write(MB/s), net_sent(MB/s), net_recv(MB/s)；一般配合`schedule`动作来使用
 ```yaml
@@ -374,7 +375,7 @@ exec: ls
 
 ### 2 监控进程性能
 [监控脚本](example/dump_process.yml)
-1. 定时监控指定进程的性能指标，并将指标值写入到csv中；
+1. 定时监控指定进程(jvisualvm)的性能指标，并将指标值写入到csv中；
 2. 性能指标有：cpu%/s, mem_used(MB), mem%, status
 ```
 # example/dump_process.yml
@@ -395,8 +396,8 @@ exec: ls
 
 ### 3 监控进程存活
 [监控脚本](example/monitor_and_restart_process.yml)
-1. 定时监控进程的存活状态
-2. 如果进程未运行，则重启
+1. 定时监控进程(jvisualvm)的存活状态
+2. 如果进程未运行，则重启jvisualvm
 ```
 # example/monitor_and_restart_process.yml
 

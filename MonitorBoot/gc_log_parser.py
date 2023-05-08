@@ -1,11 +1,13 @@
 import os
 import re
+
+import pandas as pd
 from pyutilb import ts
-from pyutilb.file import read_file
+from pyutilb.file import *
 from pyutilb.log import log
 from pyutilb.strs import substr_before
 from pyutilb.tail import Tail
-from pyutilb.util import set_vars
+from pyutilb.util import set_vars, val2df
 from ExcelBoot.boot import Boot as EBoot
 
 # ExcelBoot的步骤文件
@@ -134,6 +136,10 @@ class GcLogParser(object):
                 key = name + '.' + k
                 gc[key] = v
 
+    # 获得所有 gc
+    def all_gcs(self):
+        return pd.DataFrame(self.gcs, columns=['name', 'before', 'after', 'total', 'costtime', 'jvm_time', 'interval'])
+
     def filter_gcs(self, is_full):
         # return [gc for gc in self.gcs if gc['is_full'] == is_full]
         ret = []
@@ -152,6 +158,36 @@ class GcLogParser(object):
     def minor_gcs(self):
         return self.filter_gcs(False)
 
+    def gcs2bins(self, gcs, bins):
+        '''
+        将gc记录按时间划分区间，并统计各区间个数+耗时
+        :param gcs: gc的df
+        :param bins: 分区个数
+        :return:
+        '''
+        df = val2df(gcs)
+        df['jvm_time'] = df['jvm_time'].apply(float)
+        bins = pd.cut(df['jvm_time'], bins=bins, include_lowest=True, right=False, duplicates='drop')
+        # Series: index是区间Interval，如[0.054, 4.428), [4.428, 8.802), [8.802, 13.189)
+        counts = pd.value_counts(bins)  # 统计各区间的个数
+
+        # 统计各区间的耗时
+        costtimes = []
+        for range in counts.index:
+            costime = 0
+            for i, r in df.iterrows():
+                if r['jvm_time'] in range:
+                    costime += r['costtime']
+            costtimes.append(costime)
+
+        # 返回
+        df2 = pd.DataFrame([], columns=['range', 'count', 'costtime'])
+        df2['range'] = counts.index # 区间
+        df2['range'] = df2['range'].astype('str')
+        df2['count'] = counts.to_list() # 各区间的个数
+        df2['costtime'] = costtimes # 各区间的耗时
+        return df2
+
     def gcs2xlsx(self, filename_pref):
         '''
         导出gc信息
@@ -163,17 +199,27 @@ class GcLogParser(object):
         now = ts.now2str("%Y%m%d%H%M%S")
         file = f'{filename_pref}-{now}.xlsx'
         # 设置变量
+        all_gcs = self.all_gcs()
+        minor_gcs = self.minor_gcs()
+        full_gcs = self.full_gcs()
+        bins = 8
         vars = {
             'file': file,
-            'minor_gcs': self.minor_gcs(),
-            'full_gcs': self.full_gcs(),
+            # gc记录
+            'all_gcs': all_gcs,
+            'minor_gcs': minor_gcs,
+            'full_gcs': full_gcs,
+            # 将gc记录按时间划分区间，并统计各区间个数+耗时
+            'all_gc_bins': self.gcs2bins(all_gcs, bins),
+            'full_gc_bins': self.gcs2bins(full_gcs, bins),
+            'minor_gc_bins': self.gcs2bins(minor_gcs, bins),
         }
         set_vars(vars)
-        log.debug('----------------')
-        log.debug(f"gcs={len(self.gcs)}, minor_gcs={len(vars['minor_gcs'])}, full_gcs={len(vars['full_gcs'])}")
-        log.debug(vars)
-        log.debug(self.gcs)
-        log.debug('----------------')
+        # log.debug('----------------')
+        # log.debug(f"gcs={len(self.gcs)}, minor_gcs={len(vars['minor_gcs'])}, full_gcs={len(vars['full_gcs'])}")
+        # log.debug(vars)
+        # log.debug(self.gcs)
+        # log.debug('----------------')
 
         # 导出excel
         boot = EBoot()
@@ -193,15 +239,15 @@ if __name__ == '__main__':
     '''
 
     # 2 测试解析整个log文件
-    '''
+    # 解析文件
     parser.parse()
     for gc in parser.gcs:
         print(gc)
-
-    # 3 导出excel
+    # 导出excel
     parser.gcs2xlsx(None)
+
     '''
-    # 4 测试tail
+    # 3 测试tail
     t = Tail(file, from_end=False)
     i = 0
     def handle_line(line):
@@ -212,3 +258,4 @@ if __name__ == '__main__':
         if i == 13:
             parser.gcs2xlsx(None)
     t.follow(handle_line)
+    '''

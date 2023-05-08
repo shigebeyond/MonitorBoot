@@ -1,31 +1,31 @@
-# ExcelBoot脚本： 根据系统信息的Sys-???.csv，绘制曲线图
+# ExcelBoot脚本： 根据gc日志的xlsx，绘制柱状图
 # 开始编辑excel
-- start_edit: ../data/系统统计图.xlsx
+- start_edit: ../data/gc日志统计图.xlsx
 # 切换sheet
-- switch_sheet: 系统
-# 读csv数据，放到变量syss
+- switch_sheet: gc
+# 读csv数据，放到变量gcs
 - read_csv:
-    syss: ../data/Sys-2023-05-08.csv
+    gcs: ../data/JvmGC-20230508170923.xlsx,All GC
 # 插入plot绘图
 - insert_plot:
     A1:
-      df: syss
+      df: gcs
       kind: line
       x: time
       y: cpu%/s # y轴列名,支持多个,用逗号分割,可省(即为所有列)
       subplots: true # 每个列各自绘制子图
     A25:
-      df: syss
+      df: gcs
       kind: line
       x: time
       y: mem%/s
     O1:
-      df: syss
+      df: gcs
       kind: line
       x: time
       y: disk_read(MB/s),disk_write(MB/s)
     O25:
-      df: syss
+      df: gcs
       kind: line
       x: time
       y: net_sent(MB/s),net_recv(MB/s)
