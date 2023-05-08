@@ -254,6 +254,8 @@ print_vars:
 ```yaml
 - send_alert_email: # 发告警邮件
 ```
+发送的邮件如下:
+![](img/alert_email.png)
 
 13. monitor_pid: 监控进程的pid，其实现就是定时调用 grep_pid 动作
 ```yaml
@@ -283,25 +285,37 @@ grep_pid: java | visualvm | org.netbeans.Main # 用 `ps aux | grep` 搜索进程
           - fgc.interval < 10 # gc间隔时间 < 10s
 ```
 
-16. dump_jvm_heap: 导出jvm堆快照
+16. dump_jvm_heap: 导出jvm堆快照，导出文件名如`JvmHeap-20230505164656.hprof`
 ```yaml
 - dump_jvm_heap: # dump jvm堆快照(如果你监控了jvm进程)
 ```
 
-17. dump_jvm_thread: 导出jvm线程栈
+17. dump_jvm_thread: 导出jvm线程栈，导出文件名如`JvmThread-20230505164657.tdump`
 ```yaml
 - dump_jvm_thread: # dump jvm线程栈(如果你监控了jvm进程)
 ```
 
-18. dump_jvm_gcs_xlsx: 导出gc记录的xlsx
+18. dump_jvm_gcs_xlsx: 导出gc记录的xlsx，导出文件名如`JvmGC-20230505164657.xlsx`
 ```yaml
 - dump_jvm_gcs_xlsx: # dump gc记录
 ```
 
-19. dump_all_proc_xlsx: 导出所有进程信息的xlsx
+文件内容如下:
+![](img/ygc.png)
+![](img/fgc.png)
+
+19. dump_all_proc_xlsx: 导出所有进程信息的xlsx，导出文件名如`ProcStat-20230508083721.xlsx`
 ```yaml
 - dump_all_proc_xlsx: # dump所有进程
 ```
+
+文件内容如下:
+![](img/dir.png)
+![](img/disk_io_stat.png)
+![](img/process_cpu_stat.png)
+![](img/process_io_stat.png)
+![](img/process_mem_stat.png)
+![](img/threads_of_pid_7558.png)
 
 20. dump_sys_csv: 将系统性能指标导出到csv中，性能指标有：cpu%/s, mem%/s, mem_used(MB), disk_read(MB/s), disk_write(MB/s), net_sent(MB/s), net_recv(MB/s)；一般配合`schedule`动作来使用
 ```yaml
@@ -309,11 +323,17 @@ grep_pid: java | visualvm | org.netbeans.Main # 用 `ps aux | grep` 搜索进程
 - dump_sys_csv: 导出的csv文件前缀
 ```
 
+文件内容如下：
+![](img/dump_sys.png)
+
 21. dump_1proc_csv: 将当前被监控的进程的性能指标导出到csv中，性能指标有：cpu%/s, mem_used(MB), mem%, status；一般配合`schedule`动作来使用
 ```yaml
 - dump_1proc_csv:
 - dump_1proc_csv: 导出的csv文件前缀
 ```
+
+文件内容如下：
+![](img/dump_proc.png)
 
 22. exec: 执行命令
 ```yaml
