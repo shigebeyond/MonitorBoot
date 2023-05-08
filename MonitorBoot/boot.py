@@ -442,15 +442,25 @@ class MonitorBoot(YamlBoot):
         except Exception as ex:
             log.error("MonitorBoot.dump_jvm_thread()异常: " + str(ex), exc_info=ex)
 
-    # 将jvm gc信息导出到xlsx
-    async def dump_jvm_gcs_xlsx(self, filename_pref):
+    async def dump_jvm_gcs_xlsx(self, config):
+        '''
+        将jvm gc信息导出到xlsx
+        :param config 配置，包含 {filename_pref, bins, interval}
+        :return:
+        '''
         try:
             if self.gc_parser is None:
                 raise Exception("没用使用动作 monitor_gc_log 来监控与解析gc日志")
 
+            if config is None:
+                config = {}
+            filename_pref = config.get('filename_pref')
+            bins = config.get('bins')
+            interval = config.get('interval')
+
             # 如果有告警就用告警条件作为文件名前缀
             filename_pref = self.fix_alert_filename_pref(filename_pref, "JvmGC")
-            file = self.gc_parser.gcs2xlsx(filename_pref)
+            file = self.gc_parser.gcs2xlsx(filename_pref, bins, interval)
             log.info(f"导出jvm gc信息: {file}")
             return file
         except Exception as ex:

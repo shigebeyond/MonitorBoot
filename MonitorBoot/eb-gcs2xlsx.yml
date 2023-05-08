@@ -40,15 +40,57 @@
 - export_df: all_gc_bins
 - cells(1): # 第一行蓝色
       fill: lightskyblue
+- cols(B):
+    width: 17
+- insert_plot: # 插入plot绘图
+    E1:
+      df: all_gc_bins
+      kind: bar
+      x: time
+      y: count # y轴列名,支持多个,用逗号分割,可省(即为所有列)
+      subplots: true # 每个列各自绘制子图
+    O1:
+      df: all_gc_bins
+      kind: bar
+      x: time
+      y: costtime
 # 5 Minor GC Bins
 - switch_sheet: Minor GC Bins
 - export_df: minor_gc_bins
 - cells(1): # 第一行蓝色
       fill: lightskyblue
+- cols(B):
+    width: 17
+- insert_plot: # 插入plot绘图
+    E1:
+      df: minor_gc_bins
+      kind: bar
+      x: time
+      y: count # y轴列名,支持多个,用逗号分割,可省(即为所有列)
+      subplots: true # 每个列各自绘制子图
+    O1:
+      df: minor_gc_bins
+      kind: bar
+      x: time
+      y: costtime
 # 6 Full GC Bins
 - switch_sheet: Full GC Bins
 - export_df: full_gc_bins
 - cells(1): # 第一行蓝色
       fill: lightskyblue
+- cols(B):
+    width: 17
+- insert_plot: # 插入plot绘图
+    E1:
+      df: full_gc_bins
+      kind: bar
+      x: time
+      y: count # y轴列名,支持多个,用逗号分割,可省(即为所有列)
+      subplots: true # 每个列各自绘制子图
+    O1:
+      df: full_gc_bins
+      kind: bar
+      x: time
+      y: costtime
 # 结束编辑excel
 - end_edit:

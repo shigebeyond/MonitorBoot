@@ -1,3 +1,4 @@
+import math
 import os
 import re
 
@@ -158,40 +159,51 @@ class GcLogParser(object):
     def minor_gcs(self):
         return self.filter_gcs(False)
 
-    def gcs2bins(self, gcs, bins):
+    def gcs2bins(self, gcs, bins=None, interval=None):
         '''
         将gc记录按时间划分区间，并统计各区间个数+耗时
         :param gcs: gc的df
         :param bins: 分区个数
+        :param interval: 时间间隔，如果要对比2次gc的频率或耗时，特别是优化前后，需在同一个时间粒度(interval)上对比
         :return:
         '''
         df = val2df(gcs)
         df['jvm_time'] = df['jvm_time'].apply(float)
-        bins = pd.cut(df['jvm_time'], bins=bins, include_lowest=True, right=False, duplicates='drop')
+        if bins is None:
+            if interval is None:
+                # raise Exception("未指定参数：bins 或 interval")
+                bins = min(8, len(gcs))
+            else:
+                bins = math.ceil(df['jvm_time'].max() / interval) # 区间的right不是interval的倍数(如interval=2，区间right应该是2/4/6，但生成的却是1.8,3.9,5.9之类的)，不易读，必须手动拼接区间
+                bins = [interval*i for i in range(0, bins + 1)] # 手动拼接区间
+        bins = pd.cut(df['jvm_time'], bins=bins, include_lowest=True, right=True, duplicates='drop')
         # Series: index是区间Interval，如[0.054, 4.428), [4.428, 8.802), [8.802, 13.189)
         counts = pd.value_counts(bins)  # 统计各区间的个数
 
         # 统计各区间的耗时
         costtimes = []
-        for range in counts.index:
+        for bin in counts.index:
             costime = 0
             for i, r in df.iterrows():
-                if r['jvm_time'] in range:
+                if r['jvm_time'] in bin:
                     costime += r['costtime']
             costtimes.append(costime)
 
         # 返回
-        df2 = pd.DataFrame([], columns=['range', 'count', 'costtime'])
-        df2['range'] = counts.index # 区间
-        df2['range'] = df2['range'].astype('str')
+        df2 = pd.DataFrame([], columns=['time', 'bin', 'count', 'costtime'])
+        df2['bin'] = counts.index # 区间
+        df2['bin'] = df2['bin'].astype('str')
+        df2['time'] = [bin.right for bin in counts.index] # 区间
         df2['count'] = counts.to_list() # 各区间的个数
         df2['costtime'] = costtimes # 各区间的耗时
         return df2
 
-    def gcs2xlsx(self, filename_pref):
+    def gcs2xlsx(self, filename_pref, bins=None, interval=None):
         '''
         导出gc信息
         :param filename_pref:
+        :param bins: 分区数，bins与interval参数是二选一
+        :param interval: 分区的时间间隔，单位秒，bins与interval参数是二选一
         :return:
         '''
         # excel文件名
@@ -202,7 +214,7 @@ class GcLogParser(object):
         all_gcs = self.all_gcs()
         minor_gcs = self.minor_gcs()
         full_gcs = self.full_gcs()
-        bins = 8
+
         vars = {
             'file': file,
             # gc记录
@@ -210,9 +222,9 @@ class GcLogParser(object):
             'minor_gcs': minor_gcs,
             'full_gcs': full_gcs,
             # 将gc记录按时间划分区间，并统计各区间个数+耗时
-            'all_gc_bins': self.gcs2bins(all_gcs, bins),
-            'full_gc_bins': self.gcs2bins(full_gcs, bins),
-            'minor_gc_bins': self.gcs2bins(minor_gcs, bins),
+            'all_gc_bins': self.gcs2bins(all_gcs, bins=bins, interval=interval),
+            'full_gc_bins': self.gcs2bins(full_gcs, bins=bins, interval=interval),
+            'minor_gc_bins': self.gcs2bins(minor_gcs, bins=bins, interval=interval),
         }
         set_vars(vars)
         # log.debug('----------------')
@@ -258,4 +270,11 @@ if __name__ == '__main__':
         if i == 13:
             parser.gcs2xlsx(None)
     t.follow(handle_line)
+    '''
+
+    '''
+    # 生成gc log
+    for i in range(1, 30):
+        line = f"{i}: [Full GC (Ergonomics) [PSYoungGen: 1024K->0K(1536K)] [ParOldGen: 4070K->392K(4096K)] 5094K->392K(5632K), [Metaspace: 3332K->3332K(1056768K)], {i} secs] [Times: user=0.00 sys=0.01, real=0.01 secs]"
+        print(line)
     '''

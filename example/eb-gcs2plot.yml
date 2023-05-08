@@ -3,31 +3,21 @@
 - start_edit: ../data/gc日志统计图.xlsx
 # 切换sheet
 - switch_sheet: gc
-# 读csv数据，放到变量gcs
-- read_csv:
-    gcs: ../data/JvmGC-20230508170923.xlsx,All GC
+# 读csv数据，放到变量bins
+- read_excel:
+    bins: ../data/JvmGC-20230508211820.xlsx,All GC Bins
 # 插入plot绘图
 - insert_plot:
     A1:
-      df: gcs
-      kind: line
+      df: bins
+      kind: bar
       x: time
-      y: cpu%/s # y轴列名,支持多个,用逗号分割,可省(即为所有列)
+      y: count # y轴列名,支持多个,用逗号分割,可省(即为所有列)
       subplots: true # 每个列各自绘制子图
-    A25:
-      df: gcs
-      kind: line
+    N1:
+      df: bins
+      kind: bar
       x: time
-      y: mem%/s
-    O1:
-      df: gcs
-      kind: line
-      x: time
-      y: disk_read(MB/s),disk_write(MB/s)
-    O25:
-      df: gcs
-      kind: line
-      x: time
-      y: net_sent(MB/s),net_recv(MB/s)
+      y: costtime
 # 结束编辑excel（保存）
 - end_edit:

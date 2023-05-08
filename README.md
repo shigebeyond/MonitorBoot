@@ -298,6 +298,9 @@ grep_pid: java | visualvm | org.netbeans.Main # 用 `ps aux | grep` 搜索进程
 18. dump_jvm_gcs_xlsx: 导出gc记录的xlsx，导出文件名如`JvmGC-20230505164657.xlsx`
 ```yaml
 - dump_jvm_gcs_xlsx: # dump gc记录
+- dump_jvm_gcs_xlsx: # dump gc记录
+    #bins: 8 # 分区数，bins与interval参数是二选一
+    interval: 10 # 分区的时间间隔，单位秒，bins与interval参数是二选一
 ```
 
 文件内容如下:
