@@ -1,0 +1,10 @@
+# 对比多个gc log，并将对比结果存到excel中
+- compare_gc_logs:
+      logs: # 要对比的gc log文件，可以是dict或list
+#        - /home/shi/code/testing/kt-test/gc2.log
+#        - /home/shi/code/testing/kt-test/gc5.log
+        优化前: /home/shi/code/testing/kt-test/gc2.log
+        优化后: /home/shi/code/testing/kt-test/gc5.log
+      interval: 30 # 分区的时间间隔，单位秒
+      filename_pref: 对比gc # 生成的结果excel文件前缀，可省，默认为JvmGCCompare
+- exit:

@@ -1,0 +1,64 @@
+# 开始编辑excel
+- start_edit: $file
+# 1 对比不同log的分区gc计数
+- switch_sheet: Compare GC Count
+- export_df: compare_count_df
+- cells(1): # 第一行蓝色
+      fill: lightskyblue
+- cols(B:$max_col):
+    width: 12
+- insert_plot: # 插入plot绘图
+    ${plot_col}1:
+      df: compare_count_df
+      kind: bar
+      x: time
+      y: # y轴列名,支持多个,用逗号分割,可省(即为所有列)
+      subplots: false # 每个列各自绘制子图
+# 2 对比不同log的分区gc耗时
+- switch_sheet: Compare GC Costtime
+- export_df: compare_costtime_df
+- cells(1): # 第一行蓝色
+      fill: lightskyblue
+- cols(B:$max_col):
+    width: 14
+- insert_plot: # 插入plot绘图
+    ${plot_col}1:
+      df: compare_costtime_df
+      kind: bar
+      x: time
+      y: # y轴列名,支持多个,用逗号分割,可省(即为所有列)
+      subplots: false # 每个列各自绘制子图
+# 3 遍历gc log插入gc记录sheet
+- for(log2gcs):
+      - switch_sheet: ${for_v.key} GC
+      - set_vars(false):
+          gcs: ${for_v.gcs}
+      - export_df: gcs
+      - cells(1): # 第一行蓝色
+          fill: lightskyblue
+      - cols(B):
+          width: 17
+# 4 遍历gc log插入gc bins sheet
+- for(log2gcs):
+      - switch_sheet: ${for_v.key} GC Bins
+      - set_vars(false):
+          gc_bins: ${for_v.gc_bins}
+      - export_df: gc_bins
+      - cells(1): # 第一行蓝色
+            fill: lightskyblue
+      - cols(B):
+          width: 17
+      - insert_plot: # 插入plot绘图
+          E1:
+            df: gc_bins
+            kind: bar
+            x: time
+            y: count # y轴列名,支持多个,用逗号分割,可省(即为所有列)
+            subplots: true # 每个列各自绘制子图
+          O1:
+            df: gc_bins
+            kind: bar
+            x: time
+            y: costtime
+# 结束编辑excel
+- end_edit:

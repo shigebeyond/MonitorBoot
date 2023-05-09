@@ -49,6 +49,7 @@ class MonitorBoot(YamlBoot):
             'dump_all_proc_xlsx': self.dump_all_proc_xlsx,
             'dump_sys_csv': self.dump_sys_csv,
             'dump_1proc_csv': self.dump_1proc_csv,
+            'compare_gc_logs': self.compare_gc_logs,
         }
         self.add_actions(actions)
 
@@ -551,6 +552,22 @@ class MonitorBoot(YamlBoot):
             v = vals[i]
             if isinstance(v, float):
                 vals[i] = '%.4f' % v
+
+    def compare_gc_logs(self, config):
+        '''
+        对比多个gc log，并将对比结果存到excel中
+        :param config: {logs, interval, filename_pref}，其中
+                        logs: gc log，必填
+                        interval: 分区的时间间隔，单位秒，必填
+                        filename_pref: 生成的结果excel文件前缀
+        :return:
+        '''
+        logs = config['logs']
+        interval = config.get('interval') or 30
+        interval = int(interval)
+        filename_pref = config.get('filename_pref')
+        file = GcLogParser.compare_gclogs2xlsx(logs, interval, filename_pref)
+        log.info(f"对比gc log并将结果存到excel: {file}")
 
 # cli入口
 def main():
