@@ -329,7 +329,7 @@ grep_pid: java | visualvm | org.netbeans.Main # 用 `ps aux | grep` 搜索进程
 ![](img/process_cpu_stat.png)
 ![](img/process_io_stat.png)
 ![](img/process_mem_stat.png)
-![](img/threads_of_pid_7558.png)
+![](img/threads_of_pid.png)
 最后一个为指定进程的线程信息，最后一列`nid`为线程id的16进制，拿着`nid`可在导出的jvm线程栈文件去找对应线程信息
 
 20. dump_sys_csv: 将系统性能指标导出到csv中，导出文件名如`Sys-2023-05-08.csv`，性能指标有：cpu%/s, mem%/s, mem_used(MB), disk_read(MB/s), disk_write(MB/s), net_sent(MB/s), net_recv(MB/s)；一般配合`schedule`动作来使用

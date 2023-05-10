@@ -7,8 +7,8 @@
 # 定时做内存告警
 - schedule(10):
     - when_alert: # 发生告警时要执行以下步骤
-        - dump_jvm_thread: # dump jvm线程栈(如果你监控了jvm进程)
+        - dump_jvm_heap: # dump jvm堆快照(如果你监控了jvm进程)
         - dump_all_proc_xlsx: # dump所有进程
     - alert: # 告警
         # 告警条件
-        - cpu_percent >= 90 # cpu使用率 >= 90%
+        - proc.mem_free <= 1024M # 剩余内存 <= 1024M

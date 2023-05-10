@@ -492,7 +492,7 @@ class MonitorBoot(YamlBoot):
     def fix_alert_filename_pref(self, filename_pref, default):
         if filename_pref is None:
             # 如果有告警放到告警目录下
-            alert_dir = get_var('alert_dir')
+            alert_dir = get_var('alert_dir', False)
             if alert_dir is not None:
                 filename_pref = f"{alert_dir}/{default}"
 
