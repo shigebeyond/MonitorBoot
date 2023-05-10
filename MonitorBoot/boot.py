@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 import asyncio
+import datetime
 import os
 import time
 import uuid
@@ -50,6 +51,9 @@ class MonitorBoot(YamlBoot):
             'dump_sys_csv': self.dump_sys_csv,
             'dump_1proc_csv': self.dump_1proc_csv,
             'compare_gc_logs': self.compare_gc_logs,
+            # 结束
+            'stop_after': self.stop_after,
+            'stop_at': self.stop_at,
         }
         self.add_actions(actions)
 
@@ -80,7 +84,7 @@ class MonitorBoot(YamlBoot):
     # 执行完的后置处理
     def on_end(self):
         # 死循环处理s
-        asyncio.get_event_loop().run_forever()
+        self.loop.run_forever()
 
     # -------------------------------- 普通动作 -----------------------------------
     # 睡眠
@@ -171,7 +175,7 @@ class MonitorBoot(YamlBoot):
         :param wait_seconds: 时间间隔,单位秒
         :return:
         '''
-        self.scheduler.add_job(self.run_steps_async, 'interval', args=(steps,), seconds=int(wait_seconds))
+        self.scheduler.add_job(self.run_steps_async, 'interval', args=(steps,), seconds=int(wait_seconds), next_run_time=datetime.datetime.now())
 
     def tail(self, steps, file):
         '''
@@ -569,6 +573,16 @@ class MonitorBoot(YamlBoot):
         file = GcLogParser.compare_gclogs2xlsx(logs, interval, filename_pref)
         log.info(f"对比gc log并将结果存到excel: {file}")
 
+    # 在指定秒数后结束
+    def stop_after(self, run_seconds):
+        # 按秒数定时: 代码少，但思路绕，虽然他定义是循环定时执行，因为第一次执行时loop已经结束，因此他只能执行一次
+        self.scheduler.add_job(self.loop.stop, 'interval', seconds=int(run_seconds)+3) # 多加3秒是多给点时间来执行`到点但未执行的任务`
+
+    # 在指定时间结束
+    # :param stop_time 结束时间，如2022-7-6 13:44:10
+    def stop_at(self, stop_time):
+        self.scheduler.add_job(self.loop.stop, 'date', run_date=stop_time)
+
 # cli入口
 def main():
     # 基于yaml的执行器
@@ -581,6 +595,10 @@ def main():
     if len(step_files) == 0:
         raise Exception("Miss step config file or directory")
     try:
+        # 指定运行时间(秒)
+        if option.runtime is not None:
+            boot.stop_after(option.runtime)
+
         # 执行yaml配置的步骤
         boot.run(step_files)
     except Exception as ex:

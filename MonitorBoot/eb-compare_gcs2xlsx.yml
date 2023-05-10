@@ -36,7 +36,7 @@
       - export_df: gcs
       - cells(1): # 第一行蓝色
           fill: lightskyblue
-      - cols(B):
+      - cols(A):
           width: 17
 # 4 遍历gc log插入gc bins sheet
 - for(log2gcs):
@@ -46,7 +46,7 @@
       - export_df: gc_bins
       - cells(1): # 第一行蓝色
             fill: lightskyblue
-      - cols(B):
+      - cols(A):
           width: 17
       - insert_plot: # 插入plot绘图
           E1:

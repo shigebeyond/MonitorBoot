@@ -11,6 +11,11 @@
 
 底层实现使用协程，高性能
 
+## 作用
+1. 可做系统监控与报警
+2. 支持解析gc log，借以监控gc耗时或频率
+3. 配合Locust性能测试框架，做性能监控与报表，以弥补Locust监控功能的缺失
+
 ## 特性
 1. 支持通过yaml来配置执行的步骤，简化了监控脚本开发:
 每个步骤可以有多个动作，但单个步骤中动作名不能相同（yaml语法要求）;
@@ -46,6 +51,7 @@ export PATH="$PATH:/home/shi/.local/bin"
 ```
 
 ## 使用
+1. 执行
 ```
 # 1 执行单个文件
 MonitorBoot 步骤配置文件.yml
@@ -60,9 +66,10 @@ MonitorBoot 步骤配置目录
 MonitorBoot 步骤配置目录/step-*.yml
 ```
 
-如执行 `MonitorBoot example/step-mn52.yml`，输出如下
+2. `-t`指定运行时间，可以用来配合在Locust的压测时间内同步监控系统性能。
 ```
-......
+# 指定运行时间为600秒(10分钟)
+MonitorBoot 步骤配置文件.yml -t 600
 ```
 
 ## 步骤配置文件
@@ -304,8 +311,12 @@ grep_pid: java | visualvm | org.netbeans.Main # 用 `ps aux | grep` 搜索进程
 ```
 
 文件内容如下:
-![](img/ygc.png)
-![](img/fgc.png)
+![](img/all_gc.png)
+![](img/minor_gc.png)
+![](img/full_gc.png)
+![](img/all_bins.png)
+![](img/minor_bins.png)
+![](img/full_bins.png)
 
 19. dump_all_proc_xlsx: 导出所有进程信息的xlsx，导出文件名如`ProcStat-20230508083721.xlsx`
 ```yaml
@@ -321,7 +332,7 @@ grep_pid: java | visualvm | org.netbeans.Main # 用 `ps aux | grep` 搜索进程
 ![](img/threads_of_pid_7558.png)
 最后一个为指定进程的线程信息，最后一列`nid`为线程id的16进制，拿着`nid`可在导出的jvm线程栈文件去找对应线程信息
 
-20. dump_sys_csv: 将系统性能指标导出到csv中，性能指标有：cpu%/s, mem%/s, mem_used(MB), disk_read(MB/s), disk_write(MB/s), net_sent(MB/s), net_recv(MB/s)；一般配合`schedule`动作来使用
+20. dump_sys_csv: 将系统性能指标导出到csv中，导出文件名如`Sys-2023-05-08.csv`，性能指标有：cpu%/s, mem%/s, mem_used(MB), disk_read(MB/s), disk_write(MB/s), net_sent(MB/s), net_recv(MB/s)；一般配合`schedule`动作来使用
 ```yaml
 - dump_sys_csv:
 - dump_sys_csv: 导出的csv文件前缀
@@ -330,7 +341,7 @@ grep_pid: java | visualvm | org.netbeans.Main # 用 `ps aux | grep` 搜索进程
 文件内容如下：
 ![](img/dump_sys.png)
 
-21. dump_1proc_csv: 将当前被监控的进程的性能指标导出到csv中，性能指标有：cpu%/s, mem_used(MB), mem%, status；一般配合`schedule`动作来使用
+21. dump_1proc_csv: 将当前被监控的进程的性能指标导出到csv中，导出文件名如`Proc-java:org.netbeans.Main[18733]-2023-05-08.csv`，性能指标有：cpu%/s, mem_used(MB), mem%, status；一般配合`schedule`动作来使用
 ```yaml
 - dump_1proc_csv:
 - dump_1proc_csv: 导出的csv文件前缀
@@ -339,9 +350,40 @@ grep_pid: java | visualvm | org.netbeans.Main # 用 `ps aux | grep` 搜索进程
 文件内容如下：
 ![](img/dump_proc.png)
 
-22. exec: 执行命令
+22. compare_gc_logs: 对比多个gc log，并将对比结果存到excel中，导出文件名如`对比gc-20230509170722.xlsx`
+```yaml
+# 对比多个gc log，并将对比结果存到excel中
+- compare_gc_logs:
+      logs: # 要对比的gc log文件，可以是dict或list
+#        - /home/shi/code/testing/kt-test/gc2.log
+#        - /home/shi/code/testing/kt-test/gc5.log
+        优化前: /home/shi/code/testing/kt-test/gc2.log
+        优化后: /home/shi/code/testing/kt-test/gc5.log
+      interval: 30 # 分区的时间间隔，单位秒
+      filename_pref: 对比gc # 生成的结果excel文件前缀，可省，默认为JvmGCCompare
+```
+
+文件内容如下，可以很直观的看到2个gc的优劣：
+![](img/compare_gc_costtime.png)
+![](img/compare_gc_count.png)
+![](img/compare_gc1.png)
+![](img/compare_gc2.png)
+![](img/compare_bins1.png)
+![](img/compare_bins2.png)
+
+23. exec: 执行命令
 ```yaml
 exec: ls
+```
+
+24. stop_after: 在指定秒数后结束
+```yaml
+stop_after: 600 # 600秒(10分钟)后结束 MonitorBoot 进程
+```
+
+25. stop_at: 在指定时间结束
+```yaml
+stop_at: 2022-7-6 13:44:10 # 在 2022-7-6 13:44:10 时结束 MonitorBoot 进程
 ```
 
 ## 案例介绍
