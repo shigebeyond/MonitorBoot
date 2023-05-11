@@ -136,7 +136,7 @@ async def process_top_cpu():
     df = await process_get_cpu_df()
     # 2 选择第一个
     row = dict(df.iloc[0])
-    log.info(f"cpu最忙的进程为: {row}")
+    log.info(f"cpu最忙的进程为: %s", row)
     return row
 
 # -------------------------------- 进程mem统计 -----------------------------------
@@ -163,7 +163,7 @@ async def process_top_mem():
     df = await process_get_mem_df()
     # 2 选择第一个
     row = dict(df.iloc[0])
-    log.info(f"mem最忙的进程为: {row}")
+    log.info(f"mem最忙的进程为: %s", row)
     return row
 
 # -------------------------------- 进程io统计 -----------------------------------
@@ -197,7 +197,7 @@ async def process_top_io(is_read):
     df = df.sort_values(by=order_by, ascending=False)
     # 3 选择第一个
     row = dict(df.iloc[0])
-    log.info(f"io{label}最忙的进程为: {row}")
+    log.info(f"io%s最忙的进程为: %s", label, row)
     return row
 
 # -------------------------------- 线程处理 -----------------------------------
@@ -236,7 +236,7 @@ async def top_cpu_thread(pid):
     # 取前2个: print(df.head(2))
     # 取第1个: df.iloc[0]
     row = dict(df.iloc[0])
-    log.info(f"进程[{pid}]中cpu最忙的线程为: {row}")
+    log.info(f"进程[%s]中cpu最忙的线程为: %s", pid, row)
     return row
 
 # 是否vm线程，非业务线程

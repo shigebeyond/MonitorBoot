@@ -112,7 +112,7 @@ class MonitorBoot(YamlBoot):
     # 真正的发邮件
     def do_send_email(self, title, msg):
         if self.debug:
-            log.info(f"----- 调试模式下模拟发邮件: title = {title}, msg = {msg} -----")
+            log.info(f"----- 调试模式下模拟发邮件: title = %s, msg = %s -----", title, msg)
             return
         try:
             emailer.send_email(title, msg)
@@ -246,7 +246,7 @@ class MonitorBoot(YamlBoot):
         if not self.check_alert_expired(condition, expire_sec):
             if condition in self.alert_condition_expires:
                 print("过期时间为: "+ ts.timestamp2str(self.alert_condition_expires[condition]))
-            log.info(f"在{expire_sec}秒内忽略同条件[{condition}]的告警")
+            log.info(f"在%s秒内忽略同条件[%s]的告警", expire_sec, condition)
             return
 
         # 处理告警异常
@@ -338,7 +338,7 @@ class MonitorBoot(YamlBoot):
             # 2 当进程没运行时执行的步骤
             steps = options.get('when_no_run')
             if steps is not None:
-                log.info(f"进程[{options['grep']}]没运行, 触发when_no_run注册的动作")
+                log.info(f"进程[%s]没运行, 触发when_no_run注册的动作", options['grep'])
                 # await self.run_steps_async(steps) # 不要await，否则monitor_pid()要async，而执行yaml文件中的run_steps()是不支持调用async动作的
                 pool.exec(self.run_steps_async, steps) # 耗时操作扔到线程池执行
                 # pool.exec(self.run_steps_async, steps, get_vars(True))
@@ -361,7 +361,7 @@ class MonitorBoot(YamlBoot):
             raise Exception(f"不存在匹配[{grep}]的进程")
         if "\n" in pid:
             raise Exception(f"关键字[{grep}]匹配了多个进程: " + pid.replace('\n', ','))
-        log.info(f"关键字[{grep}]匹配进程: {pid}")
+        log.info(f"关键字[%s]匹配进程: %s", grep, pid)
         # 记录进程id+进程
         self._pid = pid
         self._proc = ProcInfo(pid)
@@ -423,7 +423,7 @@ class MonitorBoot(YamlBoot):
             cmd = f"jmap -dump:live,format=b,file='{file}' {self.pid}"
             await run_command_async(cmd)
             # os.rename(file1, file2)
-            log.info(f"导出jvm堆快照: {file}")
+            log.info(f"导出jvm堆快照: %s", file)
             return file
         except Exception as ex:
             log.error("MonitorBoot.dump_jvm_heap()异常: " + str(ex), exc_info=ex)
@@ -442,7 +442,7 @@ class MonitorBoot(YamlBoot):
             file = f'{filename_pref}-{now}.tdump'
             cmd = f"jstack -l {self.pid} > '{file}'"
             await run_command_async(cmd)
-            log.info(f"导出jvm线程栈: {file}")
+            log.info(f"导出jvm线程栈: %s", file)
             return file
         except Exception as ex:
             log.error("MonitorBoot.dump_jvm_thread()异常: " + str(ex), exc_info=ex)
@@ -466,7 +466,7 @@ class MonitorBoot(YamlBoot):
             # 如果有告警就用告警条件作为文件名前缀
             filename_pref = self.fix_alert_filename_pref(filename_pref, "JvmGC")
             file = self.gc_parser.gcs2xlsx(filename_pref, bins, interval)
-            log.info(f"导出jvm gc信息: {file}")
+            log.info(f"导出jvm gc信息: %s", file)
             return file
         except Exception as ex:
             log.error("MonitorBoot.dump_jvm_gcs_xlsx()异常: " + str(ex), exc_info=ex)
@@ -483,7 +483,7 @@ class MonitorBoot(YamlBoot):
             # 如果有告警就用告警条件作为文件名前缀
             filename_pref = self.fix_alert_filename_pref(filename_pref, "ProcStat")
             file = await all_proc_stat2xlsx(filename_pref, proc)
-            log.info(f"导出所有进程信息: {file}")
+            log.info(f"导出所有进程信息: %s", file)
             return file
         except Exception as ex:
             log.error("MonitorBoot.dump_all_proc_xlsx()异常: " + str(ex), exc_info=ex)
@@ -571,7 +571,7 @@ class MonitorBoot(YamlBoot):
         interval = int(interval)
         filename_pref = config.get('filename_pref')
         file = GcLogParser.compare_gclogs2xlsx(logs, interval, filename_pref)
-        log.info(f"对比gc log并将结果存到excel: {file}")
+        log.info(f"对比gc log并将结果存到excel: %s", file)
 
     # 在指定秒数后结束
     def stop_after(self, run_seconds):
@@ -602,7 +602,7 @@ def main():
         # 执行yaml配置的步骤
         boot.run(step_files)
     except Exception as ex:
-        log.error(f"Exception occurs: current step file is {boot.step_file}", exc_info = ex)
+        log.error(f"Exception occurs: current step file is %s", boot.step_file, exc_info = ex)
         raise ex
 
 if __name__ == '__main__':

@@ -37,7 +37,7 @@ class ProcInfo(PresleepMixin):
     def proc(self):
         proc = psutil.Process(int(self.pid))
         if proc.status() not in (psutil.STATUS_RUNNING, psutil.STATUS_SLEEPING):
-            log.error(f"进程[{self.pid}]没运行")
+            log.error(f"进程[%s]没运行", self.pid)
             return None
         return proc
 
