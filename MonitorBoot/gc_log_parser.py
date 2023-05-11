@@ -91,13 +91,13 @@ class GcLogParser(object):
             # 2 处理总的空间+时间
             # 如 0.089: [Full GC (Ergonomics)   4848K->4088K(5632K), , 0.0416957 secs]
             # 如 0.084: [GC (Allocation Failure)  3556K->2886K(5632K), 0.0039928 secs]
-            # 如 0.064: [GC (Allocation Failure) 0.064:  509K->282K(1984K), 0.0033544 secs] -- ParNew/CMS GC与 Parallel Scavenge GC相比，其jvm time(如0.064: )重复了2次，需要特殊处理
+            # 如 0.064: [GC (Allocation Failure) 0.064:  509K->282K(1984K), 0.0033544 secs] -- ParNew/CMS GC与 Parallel Scavenge GC相比，其jvm time(如0.064: )重复了2次，需要特殊处理；注: 也可能不重复，但两个时间相差0.001秒，反正就是同一个gc段内
             # 优先处理 jvm time： 干掉
             jvm_time = substr_before(line, ': [') # gc发生时vm运行了多少秒
+            line = line.replace(jvm_time + ': ', '')  # 干掉 jvm time，有可能2次
             if ':' in jvm_time: # 前面有可能有时间: `time: jvm_time: [`, 如 2019-03-28T18:09:15.774+0800: 389.142: [
                 time, jvm_time = jvm_time.rsplit(':', 1)
                 # todo: 也解析time(系统时间)
-            line = line.replace(jvm_time + ': ', '') # 干掉 jvm time
             # 规整line为年代格式
             line = line.replace(', ,', ',').replace(') ', '):')
             # 解析总的年代

@@ -4,6 +4,8 @@ from pyutilb.file import read_file
 from pyutilb.strs import substr_before
 
 '''
+注： web应用中请求是ms级，而 MonitorBoot 扫描日志是秒级的，因此没啥用
+
 线程日志解析，主要用于识别线程id，然后导出线程栈
 日志需包含`tid=110`，表示输出线程id
 '''
