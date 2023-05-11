@@ -142,7 +142,7 @@ class AlertExaminer(object):
         if op not in self.ops:
             raise Exception(f'无效校验符: {op}')
         # 调用校验函数
-        # log.debug(f"Call operator: {op}={param}")
+        # log.debug(f"Call operator: %s=%s", op, param)
         op = self.ops[op]
         return op(val, param)
 

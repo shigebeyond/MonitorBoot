@@ -94,6 +94,9 @@ class GcLogParser(object):
             # 如 0.064: [GC (Allocation Failure) 0.064:  509K->282K(1984K), 0.0033544 secs] -- ParNew/CMS GC与 Parallel Scavenge GC相比，其jvm time(如0.064: )重复了2次，需要特殊处理
             # 优先处理 jvm time： 干掉
             jvm_time = substr_before(line, ': [') # gc发生时vm运行了多少秒
+            if ':' in jvm_time: # 前面有可能有时间: `time: jvm_time: [`, 如 2019-03-28T18:09:15.774+0800: 389.142: [
+                time, jvm_time = jvm_time.rsplit(':', 1)
+                # todo: 也解析time(系统时间)
             line = line.replace(jvm_time + ': ', '') # 干掉 jvm time
             # 规整line为年代格式
             line = line.replace(', ,', ',').replace(') ', '):')
@@ -361,7 +364,8 @@ if __name__ == '__main__':
     # line = '0.089: [Full GC (Ergonomics) [PSYoungGen: 1536K->0K(1536K)] [ParOldGen: 3312K->4088K(4096K)] 4848K->4088K(5632K), [Metaspace: 3313K->3313K(1056768K)], 0.0416957 secs] [Times: user=0.13 sys=0.00, real=0.04 secs]'
     # CMS GC日志
     # line = '0.064: [GC (Allocation Failure) 0.064: [ParNew: 509K->64K(576K), 0.0032549 secs] 509K->282K(1984K), 0.0033544 secs] [Times: user=0.01 sys=0.00, real=0.00 secs]'
-    line = '104429.457: [Full GC (System) 104429.457: [CMS: 219741K->215266K(1835008K), 0.5469450 secs] 244623K->215266K(2070976K), [CMS Perm : 128846K->128831K(262144K)], 0.5470720 secs] [Times: user=0.54 sys=0.00, real=0.55 secs]'
+    # line = '104429.457: [Full GC (System) 104429.457: [CMS: 219741K->215266K(1835008K), 0.5469450 secs] 244623K->215266K(2070976K), [CMS Perm : 128846K->128831K(262144K)], 0.5470720 secs] [Times: user=0.54 sys=0.00, real=0.55 secs]'
+    line = '2019-03-28T18:09:15.774+0800: 389.142: [Full GC (Ergonomics) [PSYoungGen: 17010K->0K(925184K)] [ParOldGen: 2098093K->2103707K(2776064K)] 2115103K->2103707K(3701248K), [Metaspace: 62299K->62299K(1105920K)], 5.5291426 secs] [Times: user=14.83 sys=0.09, real=5.53 secs]'
     gc = parser.parse_gc_line(line)
     print(gc)
 
